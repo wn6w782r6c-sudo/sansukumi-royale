@@ -82,6 +82,7 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
 .code{font-size:clamp(36px,11vw,52px);letter-spacing:.22em;font-weight:800;font-variant-numeric:tabular-nums}
 .members{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .members li{display:flex;align-items:center;gap:10px;background:var(--raised);border-radius:10px;padding:8px 10px;font-size:14px}
+.members .dot.hidden{--c:var(--line);color:var(--muted)}
 .members .dot{width:28px;height:28px;border-radius:50%;background:var(--c);color:#121a1b;display:grid;place-items:center;font-weight:800;font-size:13px;flex:none}
 .members .who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted);flex:none}
@@ -137,6 +138,7 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
     <div class="field" id="inviteBox">招待リンク（友達に送る）
       <div class="invite"><input type="text" id="inviteUrl" readonly aria-label="招待リンク"><button class="btn" id="copyBtn">コピー</button></div></div>
     <ul class="members" id="members"></ul>
+    <label class="field" for="lobbyNick">ニックネーム（10文字まで）<input type="text" id="lobbyNick" maxlength="10" autocomplete="off" placeholder="例：たろう"></label>
     <div class="field">使うキャラ<div class="cards mini" id="lobbyCards"></div></div>
     <label class="chk" id="botsRow" for="botsChk"><input type="checkbox" id="botsChk" checked> 6人に足りない分をBotで埋める</label>
     <div class="status" id="lobbyMsg"></div>
@@ -538,7 +540,9 @@ function renderLobby(ps,host,amHost,waiting){
   const ul=$('members');ul.innerHTML='';
   sorted.forEach((p,i)=>{
     const cls=isCls(p.presence.cls)?p.presence.cls:'ranged',li=document.createElement('li');
-    const dot=document.createElement('span');dot.className='dot';dot.style.setProperty('--c',CLS[cls].color);dot.textContent=CLS[cls].mark;
+    const dot=document.createElement('span');dot.className='dot';
+    // 他の人のキャラは試合開始まで伏せる（三すくみの読み合いのため）
+    if(p.sameTab){dot.style.setProperty('--c',CLS[cls].color);dot.textContent=CLS[cls].mark;}else{dot.classList.add('hidden');dot.textContent='？';}
     const who=document.createElement('span');who.className='who';who.textContent=cleanNick(p.presence.nick);
     li.append(dot,who);
     const tag=(t,c)=>{const s=document.createElement('span');s.className='tag'+(c?' '+c:'');s.textContent=t;li.append(s);};
@@ -582,7 +586,7 @@ function makeHub(code){return new Promise((res,rej)=>{
   const timer=setInterval(()=>{const now=performance.now();
     for(const [id,c] of conns)if(now-(seen.get(id)||now)>HB_TIMEOUT_MS){try{c.close();}catch(e){}c.emit('close');}
     if(!dirty&&now-sentT<HB_MS)return;dirty=false;sentT=now;
-    const m={[hubId]:mine};for(const id in map){const{inp,...rest}=map[id];m[id]=rest;}
+    const{cls:_,...me}=mine,m={[hubId]:me};for(const id in map){const{inp,cls,...rest}=map[id];m[id]=rest;}  // キャラは配らない
     const msg={t:'all',m};for(const c of conns.values())if(c.open){try{c.send(msg);}catch(e){}}},40);
   peer.on('open',()=>{opened=true;res(room);});
   peer.on('connection',conn=>{
@@ -634,7 +638,7 @@ function enterRoom(R,code,isHub){
   MODE=null;G=null;
   if(!isHub)R.onLost=()=>{if(NET.R===R){leaveRoom();setStatus('ホストとの接続が切れました。');}};
   setP(Object.assign({code,nick:NET.nick,cls:chosen,j:NET.j},isHub?{hub:1,ph:'lobby'}:{}));
-  $('codeTxt').textContent=code.toUpperCase();$('inviteUrl').value=inviteUrl(code);
+  $('codeTxt').textContent=code.toUpperCase();$('inviteUrl').value=inviteUrl(code);$('lobbyNick').value=$('nick').value;
   $('members').innerHTML='';$('lobbyMsg').textContent='接続しています…';$('startBtn').hidden=true;$('botsRow').hidden=true;
   showOnly('lobby');
 }
@@ -780,6 +784,7 @@ function saveNick(){NET.nick=cleanNick($('nick').value);if(NET.nick==='ななし
 makeCards($('cards'));makeCards($('lobbyCards'));
 $('nick').value=lsGet('sk-nick')||'';NET.nick=cleanNick($('nick').value);
 $('nick').addEventListener('change',saveNick);
+$('lobbyNick').addEventListener('change',()=>{$('nick').value=$('lobbyNick').value;saveNick();});
 $('soloBtn').onclick=startSolo;
 $('createBtn').onclick=createRoom;
 $('joinBtn').onclick=()=>joinRoom($('codeIn').value);
