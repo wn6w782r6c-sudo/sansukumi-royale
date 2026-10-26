@@ -4,7 +4,7 @@
 
 - 遊ぶ：https://wn6w782r6c-sudo.github.io/sansukumi-royale/
 - 「部屋を作る」→ 表示された招待リンクを友達に送る
-- 試作版（開発中の機能を試す用）：https://wn6w782r6c-sudo.github.io/sansukumi-royale/preview/
+- 試作版（開発中の機能を試す用。今は「同じ名前の禁止」と「3・2・1 カウントダウン」入り）：https://wn6w782r6c-sudo.github.io/sansukumi-royale/preview/
   一緒に遊ぶ人は全員、同じ URL（通常版か試作版のどちらか）を使ってください。
 
 このリポジトリは公開用のコピーです。開発は別の非公開リポジトリで行い、
