@@ -79,6 +79,8 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
 .rooms .btn{font-size:13px;padding:8px 12px}
 .status{font-size:12px;color:var(--muted)}
 .status.ok{color:#7ee08a}
+.status.ng{color:#ff9aa8}
+.tag.ng{border-color:var(--zone);color:#ffd9de}
 .code{font-size:clamp(36px,11vw,52px);letter-spacing:.22em;font-weight:800;font-variant-numeric:tabular-nums}
 .members{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .members li{display:flex;align-items:center;gap:10px;background:var(--raised);border-radius:10px;padding:8px 10px;font-size:14px}
@@ -139,6 +141,7 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
       <div class="invite"><input type="text" id="inviteUrl" readonly aria-label="招待リンク"><button class="btn" id="copyBtn">コピー</button></div></div>
     <ul class="members" id="members"></ul>
     <label class="field" for="lobbyNick">ニックネーム（10文字まで）<input type="text" id="lobbyNick" maxlength="10" autocomplete="off" placeholder="例：たろう"></label>
+    <div class="status ng" id="nickErr" hidden>その名前は使用できません</div>
     <div class="field">使うキャラ<div class="cards mini" id="lobbyCards"></div></div>
     <label class="chk" id="botsRow" for="botsChk"><input type="checkbox" id="botsChk" checked> 6人に足りない分をBotで埋める</label>
     <div class="status" id="lobbyMsg"></div>
@@ -166,7 +169,8 @@ const C = { HP:3, R:18, MAP:1700, VIEW:680, INVULN:0.35,
   CD:0.6,                    // 攻撃のクールタイム（秒）：全キャラ・全プレイヤー共通
   MAX_PLAYERS:8,             // 1試合に入れる人数（これを超えた人は観戦）
   FILL_TO:6,                 // Botで埋めるときの合計人数
-  SEND_MS:50 };              // 通信の送信間隔（ミリ秒）
+  SEND_MS:50,                // 通信の送信間隔（ミリ秒）
+  COUNTDOWN:3 };             // オンライン対戦で「試合開始」を押してから動けるまでの秒数
 // ammo: 最大弾数 / reload: 1発溜まるまでの秒数 / kb: 当てた相手を飛ばす距離（キャラ直径36）
 const CLS = {
   ranged:{name:'遠距離',mark:'遠',color:'#F2B33D',speed:135,ammo:3,reload:1.3,range:330,proj:520,projR:17,kb:108,beats:'近距離に強い',desc:'大きな弾で、当てた相手を大きく吹き飛ばす。足は遅い。'},
@@ -181,6 +185,12 @@ function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 function cleanNick(s){return String(s==null?'':s).replace(/[\u0000-\u001f\u007f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,'').trim().slice(0,10)||'ななし';}
 const r2=v=>Math.round(v*100)/100;
+// 名前の重複判定用（全角/半角・大文字/小文字の違いは同じ名前とみなす）。Bot の名前（Bot1 など）も使えない
+const nameKey=s=>cleanNick(s).normalize('NFKC').toLowerCase();
+const isBotName=s=>/^bot\d+$/.test(nameKey(s));
+// 部屋に入った順で、先にいる人と同じ名前（または Bot 名）の人を返す（観戦者も含む）
+function takenNames(sorted){const seen=new Set(),bad=new Set();
+  sorted.forEach(p=>{const k=nameKey(p.presence.nick);if(seen.has(k)||isBotName(k))bad.add(p.peer);seen.add(k);});return bad;}
 
 const cv=$('game'), ctx=cv.getContext('2d');
 let W=0,H=0,DPR=1,Z=1;
@@ -251,7 +261,8 @@ function inFront(t,sx,sy){return t.cls==='tank'&&Math.abs(angDiff(Math.atan2(sy-
 // ===== 戦闘（ホスト／Bot練習で計算） =====
 function ev(arr){if(MODE!=='host')return;G.evN++;G.ev.push([G.evN,...arr]);if(G.ev.length>16)G.ev.shift();}
 function attack(u,dir){
-  if(u.cd>0||u.ammo<1||!u.alive)return false;const k=CLS[u.cls];u.cd=C.CD;u.ammo--;
+  // 開始前（カウントダウン中）は誰も攻撃できない
+  if(u.cd>0||u.ammo<1||!u.alive||G.time<0)return false;const k=CLS[u.cls];u.cd=C.CD;u.ammo--;
   if(u.cls==='ranged'){u.face=dir;
     G.proj.push({x:u.x+Math.cos(dir)*(C.R+4),y:u.y+Math.sin(dir)*(C.R+4),vx:Math.cos(dir)*k.proj,vy:Math.sin(dir)*k.proj,life:k.range/k.proj,owner:u});
     return true;}
@@ -392,6 +403,8 @@ function remoteUpdate(u,dt){
 // ===== ループ（ホスト／Bot練習） =====
 function step(dt){
   G.time+=dt;
+  // 開始前のカウントダウン中（G.time<0）は誰も動けない。時間だけ進めて全員に配る
+  if(G.time<0){fxStep(dt);if(MODE==='host'&&NET.phase==='play'&&performance.now()-NET.sendT>=C.SEND_MS)publish();updateHud();return;}
   const z=G.zone,t=Math.max(0,Math.min(1,(G.time-C.ZONE_START)/C.ZONE_DUR));z.r=C.ZONE_R0+(C.ZONE_R1-C.ZONE_R0)*t;
   for(const u of G.units){if(!u.alive)continue;
     u.cd=Math.max(0,u.cd-dt);
@@ -537,7 +550,7 @@ function renderLobby(ps,host,amHost,waiting){
   const sig=JSON.stringify([amHost,waiting,NET.bots,sorted.map(p=>[p.peer,p.presence.nick,p.presence.cls,p.sameTab])]);
   if(sig===NET.lobbySig)return;NET.lobbySig=sig;
   $('codeTxt').textContent=(NET.code||'').toUpperCase();
-  const ul=$('members');ul.innerHTML='';
+  const ul=$('members');ul.innerHTML='';const bad=takenNames(sorted);
   sorted.forEach((p,i)=>{
     const cls=isCls(p.presence.cls)?p.presence.cls:'ranged',li=document.createElement('li');
     const dot=document.createElement('span');dot.className='dot';
@@ -548,21 +561,25 @@ function renderLobby(ps,host,amHost,waiting){
     const tag=(t,c)=>{const s=document.createElement('span');s.className='tag'+(c?' '+c:'');s.textContent=t;li.append(s);};
     if(!waiting&&host&&p.peer===host.peer)tag('ホスト','host');
     if(p.sameTab)tag('あなた');
+    if(bad.has(p.peer))tag('名前が重複','ng');
     if(i>=C.MAX_PLAYERS)tag('観戦');
     ul.append(li);
   });
   const humans=Math.min(sorted.length,C.MAX_PLAYERS),total=NET.bots?Math.max(humans,C.FILL_TO):humans;
-  $('botsRow').hidden=!amHost;$('startBtn').hidden=!amHost;$('startBtn').disabled=total<2;
+  const me=sorted.find(p=>p.sameTab);$('nickErr').hidden=!(me&&bad.has(me.peer));
+  $('botsRow').hidden=!amHost;$('startBtn').hidden=!amHost;const badPlayer=sorted.slice(0,C.MAX_PLAYERS).some(p=>bad.has(p.peer));  // 観戦者の重複では試合開始を止めない
+  $('startBtn').disabled=total<2||badPlayer;
   $('lobbyMsg').className='status';
-  $('lobbyMsg').textContent=waiting?'部屋の情報を確認しています…':amHost?(total<2?'1人では始められません。Botを入れるか、友達の参加を待ってください。':`${humans}人${total>humans?`＋Bot${total-humans}体`:''}で始めます。`):'ホストが試合を始めるのを待っています。';
+  $('lobbyMsg').textContent=waiting?'部屋の情報を確認しています…':amHost?(badPlayer?'同じ名前の人がいます。名前を変えてもらってください。':total<2?'1人では始められません。Botを入れるか、友達の参加を待ってください。':`${humans}人${total>humans?`＋Bot${total-humans}体`:''}で始めます。`):'ホストが試合を始めるのを待っています。';
 }
 
 function hostStart(){
   const ps=(NET.R?NET.R.peers():[]).filter(p=>p.presence&&p.presence.code===NET.code&&typeof p.presence.nick==='string'&&typeof p.presence.j==='number').sort(byJ).slice(0,C.MAX_PLAYERS);
+  if(takenNames(ps).size)return;
   const list=ps.map(p=>({id:p.peer,name:cleanNick(p.presence.nick),cls:isCls(p.presence.cls)?p.presence.cls:'ranged',ctrl:p.sameTab?'local':'remote',remote:!p.sameTab}));
   if(NET.bots)fillBots(list,C.FILL_TO);
   if(list.length<2)return;
-  myId=NET.me;MODE='host';NET.phase='play';newGame(list);showPlay();publish();
+  myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;showPlay();publish();
 }
 
 // ----- PeerJS で room（peers / presence）と同じ形の部屋を作る -----
@@ -736,6 +753,10 @@ function draw(){
   ctx.textAlign='center';ctx.font='800 15px '+font;
   for(const t of G.texts){ctx.globalAlpha=Math.min(1,t.life*2);ctx.fillStyle=t.color;ctx.fillText(t.txt,t.x,t.y);}ctx.globalAlpha=1;
   ctx.restore();
+  // 開始前のカウントダウン「3・2・1」と「スタート！」（オンライン対戦のみ）
+  if(MODE!=='solo'&&G.time<.7){const cd=G.time<0,txt=cd?String(Math.ceil(-G.time-1e-6)):'スタート！',sz=cd?140:64;
+    ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`800 ${sz}px ${font}`;ctx.globalAlpha=cd?1:Math.max(0,1-G.time/.7);
+    ctx.lineWidth=8;ctx.strokeStyle='rgba(0,0,0,.55)';ctx.strokeText(txt,W/2,H*.3);ctx.fillStyle='#fff';ctx.fillText(txt,W/2,H*.3);ctx.restore();}
   ctx.lineWidth=2;
   if(touch.move){const o=touch.move;ctx.strokeStyle='rgba(255,255,255,.35)';ctx.beginPath();ctx.arc(o.ox,o.oy,50,0,TAU);ctx.stroke();
     const dx=o.x-o.ox,dy=o.y-o.oy,l=Math.hypot(dx,dy),s=l>50?50/l:1;ctx.fillStyle='rgba(255,255,255,.5)';ctx.beginPath();ctx.arc(o.ox+dx*s,o.oy+dy*s,20,0,TAU);ctx.fill();}
@@ -784,7 +805,11 @@ function saveNick(){NET.nick=cleanNick($('nick').value);if(NET.nick==='ななし
 makeCards($('cards'));makeCards($('lobbyCards'));
 $('nick').value=lsGet('sk-nick')||'';NET.nick=cleanNick($('nick').value);
 $('nick').addEventListener('change',saveNick);
-$('lobbyNick').addEventListener('change',()=>{$('nick').value=$('lobbyNick').value;saveNick();});
+$('lobbyNick').addEventListener('change',()=>{
+  // 部屋にいる他の人と同じ名前（または Bot 名）なら受け付けずに元の名前に戻す
+  const v=$('lobbyNick').value,others=NET.R?NET.R.peers().filter(p=>!p.sameTab&&p.presence&&p.presence.code===NET.code):[];
+  if(isBotName(v)||others.some(p=>nameKey(p.presence.nick)===nameKey(v))){$('nickErr').hidden=false;$('lobbyNick').value=NET.nick;return;}
+  $('nickErr').hidden=true;$('nick').value=v;saveNick();});
 $('soloBtn').onclick=startSolo;
 $('createBtn').onclick=createRoom;
 $('joinBtn').onclick=()=>joinRoom($('codeIn').value);
