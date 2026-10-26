@@ -454,6 +454,21 @@ function updateHud(){
 // ===== オンライン（PeerJS） =====
 // 部屋を作った人の端末が中心（ホスト）になり、全員とつながる。ホストだけが試合を計算し、状態を配る。
 const PEER_PREFIX='sansukumi-v1-';
+// 中継（TURN）サーバー：違うネットワークのスマホ同士をつなぐため。turn-worker/ の Worker の URL を入れる。空なら PeerJS の初期設定のまま
+let TURN_URL='';
+let iceCache=null,iceAt=0;
+async function peerOpts(){
+  if(!TURN_URL)return {debug:0};
+  if(!iceCache||performance.now()-iceAt>12*3600e3){  // 認証情報は24時間有効なので半日で取り直す
+    if(performance.now()-iceAt>23*3600e3)iceCache=null;  // 期限が近い・切れたものは、取り直しに失敗しても使わない
+    try{const ac=new AbortController(),t=setTimeout(()=>ac.abort(),4000);
+      const j=await (await fetch(TURN_URL,{signal:ac.signal,cache:'no-store'})).json();clearTimeout(t);
+      // ポート53のURLはブラウザが使えず接続が遅くなるので外す
+      const list=[].concat(j.iceServers||[]).filter(x=>x&&x.urls).map(x=>({...x,urls:[].concat(x.urls).filter(u=>!/:53(\?|$)/.test(u))})).filter(x=>x.urls.length);
+      if(list.length){iceCache=[{urls:'stun:stun.l.google.com:19302'},...list];iceAt=performance.now();}
+    }catch(e){}}
+  return iceCache?{debug:0,config:{iceServers:iceCache}}:{debug:0};  // 取得に失敗したら初期設定でつなぐ
+}
 // 生存確認：ホストと参加者は少なくとも HB_MS ごとに何かを送り、HB_TIMEOUT_MS 何も届かない相手は切断とみなす
 // （回線が突然切れたときは WebRTC の close が来ないことがあるため）
 const HB_MS=1000, HB_TIMEOUT_MS=15000;
@@ -593,8 +608,8 @@ function cleanPresence(p){
   if(p.inp&&typeof p.inp==='object'){const i=p.inp;o.inp={x:+i.x||0,y:+i.y||0,a:(i.a===null||i.a===undefined)?null:(+i.a||0),f:i.f?1:0,n:+i.n||0,d:+i.d||0};}
   return o;
 }
-function makeHub(code){return new Promise((res,rej)=>{
-  const hubId=PEER_PREFIX+code,peer=new Peer(hubId,{debug:0}),conns=new Map(),map={};
+function makeHub(code,opts){return new Promise((res,rej)=>{
+  const hubId=PEER_PREFIX+code,peer=new Peer(hubId,opts),conns=new Map(),map={};
   let mine={},dirty=true,cache=null,opened=false,sentT=0;const seen=new Map();
   const room={hubId,myId:hubId,
     peers(){if(!cache)cache=[{peer:hubId,sameTab:true,presence:mine},...Object.entries(map).map(([id,p])=>({peer:id,sameTab:false,presence:p}))];return cache;},
@@ -617,8 +632,8 @@ function makeHub(code){return new Promise((res,rej)=>{
   peer.on('disconnected',()=>{setTimeout(()=>{try{if(!peer.destroyed)peer.reconnect();}catch(_){}},1000);});
   setTimeout(()=>{if(!opened){clearInterval(timer);try{peer.destroy();}catch(_){}rej({type:'timeout'});}},15000);
 });}
-function makeClient(code){return new Promise((res,rej)=>{
-  const hubId=PEER_PREFIX+code,peer=new Peer({debug:0});
+function makeClient(code,opts){return new Promise((res,rej)=>{
+  const hubId=PEER_PREFIX+code,peer=new Peer(opts);
   let conn=null,remote={},mine={},cache=null,opened=false,sendT=0,pend=null,hb=null,recvT=0;
   const room={hubId,myId:null,onLost:null,
     peers(){if(!cache){const arr=[];for(const id in remote){if(id===room.myId)continue;arr.push({peer:id,sameTab:false,presence:remote[id]});}
@@ -663,7 +678,7 @@ async function createRoom(){
   if(!NET.ok)return;saveNick();busy(true,'部屋を作っています…');
   const a='abcdefghjkmnpqrstuvwxyz23456789';
   for(let i=0;i<4;i++){let code='';for(let k=0;k<4;k++)code+=a[Math.floor(Math.random()*a.length)];
-    try{const R=await makeHub(code);busy(false);enterRoom(R,code,true);return;}
+    try{const R=await makeHub(code,await peerOpts());busy(false);enterRoom(R,code,true);return;}
     catch(e){if(e&&e.type==='unavailable-id')continue;busy(false);setStatus(errMsg(e));return;}}
   busy(false);setStatus('部屋を作れませんでした。もう一度試してください。');
 }
@@ -672,7 +687,7 @@ async function joinRoom(code){
   code=String(code||'').toLowerCase().replace(/[^a-z0-9]/g,'');
   if(!/^[a-z0-9]{3,6}$/.test(code)){setStatus('部屋コードは英数字3〜6文字です。');return;}
   saveNick();busy(true,'部屋に接続しています…');
-  try{const R=await makeClient(code);busy(false);enterRoom(R,code,false);}
+  try{const R=await makeClient(code,await peerOpts());busy(false);enterRoom(R,code,false);}
   catch(e){busy(false);setStatus(errMsg(e));}
 }
 function leaveRoom(){const R=NET.R;NET.R=null;MODE=null;G=null;NET.amHost=false;NET.code=null;if(R)R.leave();showOnly('start');}
