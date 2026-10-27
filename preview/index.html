@@ -443,11 +443,11 @@ function autoAim(p){
 function firePlayerTouch(o){const p=player();if(!p||!p.alive||!G||G.over)return;
   const dx=o.x-o.ox,dy=o.y-o.oy,dir=Math.hypot(dx,dy)>14?Math.atan2(dy,dx):autoAim(p);
   if(MODE==='client'){NET.n++;NET.d=dir;NET.lastInp='';}else attack(p,dir);}
-// スキルの向き：近距離は移動している方向（止まっていれば向いている方向）、それ以外は照準（なければ近くの相手）
+// スキルの向き：近距離は移動している方向（止まっていれば向いている方向）、それ以外はマウスかタッチの照準（なければ近くの相手）
 function skillDir(p){
   const I=readInput(p);
   if(p.cls==='melee')return (I.mx||I.my)?Math.atan2(I.my,I.mx):p.face;
-  return mouse.used&&I.aim!==null?I.aim:autoAim(p);
+  return (mouse.used||touch.aim)&&I.aim!==null?I.aim:autoAim(p);
 }
 function skillPress(){const p=player();if(!p||!p.alive||!G||G.over||G.time<0||p.sk<1)return;
   const dir=skillDir(p);
