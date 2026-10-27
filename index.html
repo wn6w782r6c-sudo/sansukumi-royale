@@ -35,6 +35,15 @@ body{margin:0;font-size:14px;background:var(--ground);color:var(--ink);font-fami
 .hud{position:fixed;top:0;left:0;right:0;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none;font-size:13px;
   padding-top:calc(env(safe-area-inset-top,0px) + 10px);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .hud .grp{display:flex;gap:6px;flex-wrap:wrap}
+.chip.snd{pointer-events:auto;font:inherit;color:inherit;cursor:pointer}
+/* メニュー画面用の音ボタン（試合中は上のバーの中にある方を使う） */
+.chip.snd.menu{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:max(12px,env(safe-area-inset-right,0px));z-index:20;font-size:13px}
+/* 固有スキルのボタン：右手の親指が届く位置。押すと照準操作にはならない */
+.skill{position:fixed;right:max(18px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 110px);width:76px;height:76px;border-radius:50%;
+  border:3px solid var(--c,#fff);background:rgba(10,16,17,.78);color:var(--ink);font:inherit;font-size:11px;font-weight:800;line-height:1.2;display:grid;place-items:center;align-content:center;gap:2px;touch-action:none;-webkit-user-select:none;user-select:none}
+.skill b{font-size:20px;color:var(--c,#fff)}
+.skill:disabled{opacity:.35}
+.card p.sk{color:var(--ink)}
 .chip{background:rgba(10,16,17,.74);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip b{font-weight:800}
 .chip.warn{border-color:var(--zone);color:#ffd9de}
@@ -105,10 +114,11 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
 
 <canvas id="game"></canvas>
 <div class="hud" id="hud" hidden>
-  <div class="grp"><div class="chip" id="alive">残り <b>6</b>人</div><div class="chip" id="modeChip">Bot練習</div></div>
+  <div class="grp"><div class="chip" id="alive">残り <b>6</b>人</div><div class="chip" id="modeChip">Bot練習</div><button class="chip snd" id="soundBtn" aria-label="効果音の切り替え">音 ON</button></div>
   <div class="chip" id="zoneChip">安全地帯</div>
 </div>
 <div class="feed" id="feed"></div>
+<button class="skill" id="skillBtn" hidden aria-label="スキルを使う"></button>
 <div class="hint" id="hint" hidden></div>
 
 <div class="overlay" id="start">
@@ -121,7 +131,7 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
     </div>
     <label class="field" for="nick">ニックネーム（10文字まで）<input type="text" id="nick" maxlength="10" autocomplete="off" placeholder="例：たろう"></label>
     <div class="cards" id="cards"></div>
-    <div class="stats">全キャラ 体力3・攻撃1。攻撃は3発まで（頭上の黄色いゲージ）、使った分は1発ずつ自動でリロード。最後の1人まで戦い、時間とともに縮む安全地帯の外では2.5秒ごとに1ダメージ。<br>
+    <div class="stats">全キャラ 体力3・攻撃1。攻撃は3発まで（頭上の黄色いゲージ）、使った分は1発ずつ自動でリロード。最後の1人まで戦い、時間とともに縮む安全地帯の外では2.5秒ごとに1ダメージ。マップに出る「＋」は体力1回復、「»」はしばらく足が速くなる、「★」はスキルを1回分取り戻す。<br>
       スマホ：画面左を指でなぞって移動／右をタップで自動照準、なぞって離すとその方向へ攻撃。PC：WASDで移動／マウスで狙ってクリック。</div>
     <div class="row"><button class="btn" id="soloBtn">Botと練習する</button></div>
     <div class="sec">
@@ -159,6 +169,8 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
   </div>
 </div>
 
+<button class="chip snd menu" id="soundBtn2" aria-label="音の切り替え">音 ON</button>
+
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>if(typeof Peer!=="function")document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <script>
@@ -170,12 +182,23 @@ const C = { HP:3, R:18, MAP:1700, VIEW:680, INVULN:0.35,
   MAX_PLAYERS:8,             // 1試合に入れる人数（これを超えた人は観戦）
   FILL_TO:6,                 // Botで埋めるときの合計人数
   SEND_MS:50,                // 通信の送信間隔（ミリ秒）
-  COUNTDOWN:3 };             // オンライン対戦で「試合開始」を押してから動けるまでの秒数
+  COUNTDOWN:3,               // オンライン対戦で「試合開始」を押してから動けるまでの秒数
+  ITEM_MAX:3,                // マップに同時に置かれるアイテムの最大数
+  ITEM_FIRST:6,              // 最初のアイテムが出るまでの秒数
+  ITEM_EVERY:9,              // アイテムが1つ出る間隔（秒）
+  SPEED_MUL:1.5,             // 足早アイテムの速さ（倍）
+  SPEED_TIME:5,              // 足早アイテムの効果時間（秒）
+  SKILL_ITEM_RATE:0.2,       // 出るアイテムのうちスキル回復アイテムの割合（残りは回復と足早が半々）
+  SKILL_USES:2,              // 固有スキルを1試合に使える回数
+  SKILL_CD:1 };              // スキルを続けて使えるまでの秒数
 // ammo: 最大弾数 / reload: 1発溜まるまでの秒数 / kb: 当てた相手を飛ばす距離（キャラ直径36）
 const CLS = {
-  ranged:{name:'遠距離',mark:'遠',color:'#F2B33D',speed:135,ammo:3,reload:1.3,range:330,proj:520,projR:17,kb:108,beats:'近距離に強い',desc:'大きな弾で、当てた相手を大きく吹き飛ばす。足は遅い。'},
-  melee:{name:'近距離',mark:'近',color:'#EF5D72',speed:215,ammo:3,reload:1.1,range:56,arc:1.7,kb:0,beats:'タンクに強い',desc:'速い足でタンクの背後に回り込む。正面からは盾に防がれる。'},
-  tank:{name:'タンク',mark:'盾',color:'#4FA6E8',speed:150,ammo:3,reload:1.4,range:64,arc:1.5,turn:3.0,shield:1.15,kb:0,beats:'遠距離に強い',desc:'正面の盾で弾も斬撃も防ぐ。振り向きが遅く、背中が弱点。'},
+  ranged:{name:'遠距離',mark:'遠',color:'#F2B33D',speed:135,ammo:3,reload:1.3,range:330,proj:520,projR:17,kb:108,beats:'近距離に強い',desc:'大きな弾で、当てた相手を大きく吹き飛ばす。足は遅い。',
+    skill:'貫通弾',skillDesc:'盾も壁も、当たった相手も突き抜ける弾',pierceRange:520},
+  melee:{name:'近距離',mark:'近',color:'#EF5D72',speed:215,ammo:3,reload:1.1,range:56,arc:1.7,kb:0,beats:'タンクに強い',desc:'速い足でタンクの背後に回り込む。正面からは盾に防がれる。',
+    skill:'無敵ダッシュ',skillDesc:'無敵のまま一気に前へ移動',dash:260,dashTime:.22},
+  tank:{name:'タンク',mark:'盾',color:'#4FA6E8',speed:150,ammo:3,reload:1.4,range:64,arc:1.5,turn:3.0,shield:1.15,kb:0,beats:'遠距離に強い',desc:'正面の盾で弾も斬撃も防ぐ。振り向きが遅く、背中が弱点。',
+    skill:'衝撃波',skillDesc:'周り全部に攻撃して弾き飛ばす',waveR:110,waveKb:150},
 };
 // =========================================================
 const CLS_KEYS=['ranged','melee','tank'];
@@ -183,6 +206,69 @@ const isCls=c=>CLS_KEYS.includes(c);   // CLS[c] だけだと 'constructor' な�
 const $=id=>document.getElementById(id);
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+
+// ===== 効果音（sounds/ の mp3 を鳴らす。ファイルがない音は鳴らさない） =====
+const SFX=['tick','go','shot','swing','hit','block','ko','zone','win','lose','click','heal','boost','skill','charge'];
+const SND={ctx:null,buf:{},on:lsGet('sk-sound')!=='0',lastCd:0};
+function sndInit(){  // iOS は画面に触れたあとでないと音を出せないので、最初の操作で準備する
+  if(SND.ctx){if(SND.ctx.state==='suspended')SND.ctx.resume().catch(()=>{});return;}
+  try{SND.ctx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return;}
+  bgmApply();
+  for(const k of SFX)fetch(`sounds/${k}.mp3`).then(r=>r.ok?r.arrayBuffer():null).then(b=>b&&SND.ctx.decodeAudioData(b)).then(a=>{if(a)SND.buf[k]=a;}).catch(()=>{});
+}
+function sfx(k,vol=1){
+  if(!SND.on||!SND.ctx||!SND.buf[k]||vol<=0)return;
+  try{const s=SND.ctx.createBufferSource(),g=SND.ctx.createGain();g.gain.value=vol;s.buffer=SND.buf[k];s.connect(g);g.connect(SND.ctx.destination);s.start();}catch(e){}
+}
+// 試合中の音は、画面の中心（自分か観戦中の相手）から遠いほど小さくする
+function sfxAt(k,x,y,vol=1){const c=G&&G.cam;sfx(k,c?vol*Math.max(0,1-Math.hypot(x-c.x,y-c.y)/(C.VIEW*.9)):vol);}
+
+// ===== BGM（Web Audio でその場で演奏する。音楽のファイルは使わない） =====
+// 1拍を8分音符2つに分け、play(i, 時刻, 8分音符の長さ) で i 番目の音を鳴らす。len で1周
+const mtof=n=>440*Math.pow(2,(n-69)/12);
+const SONGS={
+  lobby:{bpm:92,len:64,vol:.5,play(i,t,d){  // ロビー：ゆったりしたアルペジオ（Am→F→C→G、各2小節）
+    const ch=[[57,60,64],[53,57,60],[48,52,55],[55,59,62]][Math.floor(i/16)%4];
+    bgmTone('triangle',mtof(ch[[0,1,2,1,2,1,0,1][i%8]]+12),t,d*1.6,.22);
+    if(i%8===0)bgmTone('sine',mtof(ch[0]-12),t,d*7,.35);
+    if(i%16===12)bgmTone('sine',mtof(ch[2]+24),t,d*3,.07);
+  }},
+  battle:{bpm:140,len:64,vol:.5,play(i,t,d){  // 試合：速いリフ＋ベース＋ドラム（Am→F→G→E、各1小節。メロディは前半と後半で変わる）
+    const root=[45,41,43,40][Math.floor(i/8)%4];
+    const lead=[69,0,72,69,76,0,74,72, 69,0,72,69,77,76,74,72, 67,0,71,67,74,0,72,71, 64,0,68,71,76,74,71,68,
+      76,0,74,72,69,0,72,74, 77,0,76,74,72,0,69,72, 74,0,72,71,67,0,71,74, 76,0,74,71,68,0,71,76][i];
+    if(lead)bgmTone('square',mtof(lead),t,d*.9,.07);
+    bgmTone('square',mtof(root+(i%2?12:0)),t,d*.8,.08);
+    if(i%4===0)bgmKick(t);
+    if(i%4===2)bgmNoise(t,.12,.16,1800);
+    bgmNoise(t,.03,.04,7000);
+  }},
+};
+const BGM={want:null,cur:null,gain:null,next:0,i:0,timer:null,noise:null};
+function bgmTone(type,f,t,dur,v){const c=SND.ctx,o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=f;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v,t+.008);g.gain.exponentialRampToValueAtTime(.0005,t+dur);
+  o.connect(g);g.connect(BGM.gain);o.start(t);o.stop(t+dur+.02);}
+function bgmNoise(t,dur,v,hp){const c=SND.ctx;
+  if(!BGM.noise){const b=c.createBuffer(1,c.sampleRate/2,c.sampleRate),d=b.getChannelData(0);for(let k=0;k<d.length;k++)d[k]=Math.random()*2-1;BGM.noise=b;}
+  const s=c.createBufferSource(),f=c.createBiquadFilter(),g=c.createGain();s.buffer=BGM.noise;f.type='highpass';f.frequency.value=hp;
+  g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.0005,t+dur);s.connect(f);f.connect(g);g.connect(BGM.gain);s.start(t);s.stop(t+dur+.02);}
+function bgmKick(t){const c=SND.ctx,o=c.createOscillator(),g=c.createGain();
+  o.frequency.setValueAtTime(150,t);o.frequency.exponentialRampToValueAtTime(45,t+.12);
+  g.gain.setValueAtTime(.5,t);g.gain.exponentialRampToValueAtTime(.0005,t+.18);o.connect(g);g.connect(BGM.gain);o.start(t);o.stop(t+.2);}
+function bgmWant(name){BGM.want=name;bgmApply();}
+// 流す曲を切り替える。音がオフのとき・音の準備前（最初のタップ前）は鳴らさない
+function bgmApply(){
+  const c=SND.ctx,name=SND.on&&c?BGM.want:null;
+  if(name===BGM.cur)return;
+  BGM.cur=name;clearInterval(BGM.timer);BGM.timer=null;
+  if(BGM.gain){const old=BGM.gain;old.gain.setTargetAtTime(0,c.currentTime,.12);setTimeout(()=>old.disconnect(),800);BGM.gain=null;}
+  if(!name)return;
+  const song=SONGS[name],g=c.createGain();g.gain.value=song.vol*1.6;g.connect(c.destination);BGM.gain=g;
+  BGM.i=0;BGM.next=c.currentTime+.1;
+  BGM.timer=setInterval(()=>{if(BGM.gain!==g)return;const d=60/song.bpm/2;
+    if(BGM.next<c.currentTime-.05)BGM.next=c.currentTime+.02;  // 裏に回って止まっていた分は飛ばす（まとめて鳴らさない）
+    while(BGM.next<c.currentTime+.15){song.play(BGM.i%song.len,BGM.next,d);BGM.next+=d;BGM.i++;}},30);
+}
 function cleanNick(s){return String(s==null?'':s).replace(/[\u0000-\u001f\u007f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,'').trim().slice(0,10)||'ななし';}
 const r2=v=>Math.round(v*100)/100;
 // 名前の重複判定用（全角/半角・大文字/小文字の違いは同じ名前とみなす）。Bot の名前（Bot1 など）も使えない
@@ -222,7 +308,7 @@ function fillBots(list,n){
     list.push({id:'#b'+k,name:'Bot'+k,cls:opts[Math.floor(Math.random()*opts.length)],ctrl:'bot'});k++;}
 }
 function newGame(list,from){
-  const units=list.map(o=>({id:o.id,name:o.name,cls:o.cls,ctrl:o.ctrl,remote:!!o.remote,x:0,y:0,vx:0,vy:0,face:0,aim:0,hp:C.HP,cd:0,
+  const units=list.map(o=>({id:o.id,name:o.name,cls:o.cls,ctrl:o.ctrl,remote:!!o.remote,x:0,y:0,vx:0,vy:0,face:0,aim:0,hp:C.HP,cd:0,spd:0,sk:C.SKILL_USES,skCd:0,dash:null,lastK:-1,
     ammo:CLS[o.cls].ammo,rl:0,kb:null,inv:0,flash:0,swing:null,alive:true,zoneT:0,kills:0,place:0,lastN:-1,ai:newAI()}));
   const obs=makeObstacles(),M=C.MAP;
   if(from){const by={};units.forEach(u=>by[u.id]=u);
@@ -234,8 +320,8 @@ function newGame(list,from){
       for(let k=0;k<20;k++){u.x=M/2+Math.cos(a)*d;u.y=M/2+Math.sin(a)*d;if(!obs.some(o=>circleRect(u,o)))break;d-=25;}
       u.face=u.aim=Math.atan2(M/2-u.y,M/2-u.x);});
   }
-  G={units,obs,proj:[],parts:[],texts:[],time:from?(+from.t||0):0,zone:{x:M/2,y:M/2,r:from?(+from.z||C.ZONE_R0):C.ZONE_R0},
-    over:false,ended:false,endT:0,ev:[],evN:from?Math.max(0,...(from.e||[]).map(e=>+e[0]||0)):0,
+  G={units,obs,proj:[],parts:[],texts:[],rings:[],time:from?(+from.t||0):0,zone:{x:M/2,y:M/2,r:from?(+from.z||C.ZONE_R0):C.ZONE_R0},
+    over:false,ended:false,endT:0,items:[],itemT:C.ITEM_FIRST,itemN:0,ev:[],evN:from?Math.max(0,...(from.e||[]).map(e=>+e[0]||0)):0,
     gid:from?String(from.g):Math.random().toString(36).slice(2,8),killer:null,cam:{x:M/2,y:M/2}};
   const f=player()||units[0];G.cam.x=f.x;G.cam.y=f.y;
 }
@@ -263,11 +349,11 @@ function ev(arr){if(MODE!=='host')return;G.evN++;G.ev.push([G.evN,...arr]);if(G.
 function attack(u,dir){
   // 開始前（カウントダウン中）は誰も攻撃できない
   if(u.cd>0||u.ammo<1||!u.alive||G.time<0)return false;const k=CLS[u.cls];u.cd=C.CD;u.ammo--;
-  if(u.cls==='ranged'){u.face=dir;
+  if(u.cls==='ranged'){u.face=dir;sfxAt('shot',u.x,u.y,.7);ev(['f',u.id]);  // 発射の合図（参加者はこれで発射音を鳴らす）
     G.proj.push({x:u.x+Math.cos(dir)*(C.R+4),y:u.y+Math.sin(dir)*(C.R+4),vx:Math.cos(dir)*k.proj,vy:Math.sin(dir)*k.proj,life:k.range/k.proj,owner:u});
     return true;}
   if(u.cls==='tank')dir=u.face;
-  u.swing={dir,t:.14};ev(['s',u.id,Math.round(dir*100)]);
+  u.swing={dir,t:.14};ev(['s',u.id,Math.round(dir*100)]);sfxAt('swing',u.x,u.y,.8);
   for(const v of G.units){if(v===u||!v.alive)continue;
     const d=Math.hypot(v.x-u.x,v.y-u.y);if(d>k.range+C.R)continue;
     if(Math.abs(angDiff(Math.atan2(v.y-u.y,v.x-u.x),dir))>k.arc/2+.25)continue;
@@ -276,9 +362,9 @@ function attack(u,dir){
   return true;
 }
 function block(v,x,y){fxBlock(x,y,v);ev(['b',v.id,Math.round(x),Math.round(y)]);}
-function hit(v,src,kbDir){
+function hit(v,src,kbDir,kbDist){
   if(!v.alive||v.inv>0)return;v.hp--;v.inv=C.INVULN;
-  const kb=src?CLS[src.cls].kb:0;
+  const kb=kbDist!==undefined?kbDist:src?CLS[src.cls].kb:0;
   if(kb>0&&kbDir!==undefined)v.kb={x:Math.cos(kbDir),y:Math.sin(kbDir),t:C.KB_TIME,sp:kb/C.KB_TIME};
   fxHit(v);ev(['h',v.id]);
   if(v.hp<=0)kill(v,src);
@@ -294,12 +380,60 @@ function kill(v,src){
   }
 }
 
+// ===== 固有スキル（ホスト／Bot練習で計算）。1試合に C.SKILL_USES 回まで =====
+function useSkill(u,dir){
+  if(!u.alive||u.sk<1||u.skCd>0||G.time<0)return false;
+  u.sk--;u.skCd=C.SKILL_CD;const k=CLS[u.cls];
+  if(u.cls==='ranged'){  // 貫通弾：壁も盾も無視し、当たった相手を突き抜けて進む
+    u.face=dir;
+    G.proj.push({x:u.x+Math.cos(dir)*(C.R+4),y:u.y+Math.sin(dir)*(C.R+4),vx:Math.cos(dir)*k.proj,vy:Math.sin(dir)*k.proj,life:k.pierceRange/k.proj,owner:u,pierce:true,hits:new Set()});
+  }else if(u.cls==='melee'){  // 無敵ダッシュ：向いた方へ一気に進み、その間は攻撃を受けない
+    u.face=dir;u.dash={x:Math.cos(dir),y:Math.sin(dir),t:k.dashTime,sp:k.dash/k.dashTime};u.inv=Math.max(u.inv,k.dashTime+.15);
+  }else{  // 衝撃波：周り全部の相手に当てて弾き飛ばす（盾の向きは関係ない）
+    for(const v of G.units){if(v===u||!v.alive)continue;
+      if(Math.hypot(v.x-u.x,v.y-u.y)<=k.waveR+C.R)hit(v,u,Math.atan2(v.y-u.y,v.x-u.x),k.waveKb);}
+  }
+  fxSkill(u);ev(['S',u.id]);return true;
+}
+
+// ===== アイテム（ホスト／Bot練習で計算） =====
+// heal：体力を1回復（満タンのときは拾わない） / speed：しばらく足が速くなる / skill：スキルの残り回数を1戻す（最大のときは拾わない）
+const ITEMS={heal:{mark:'+',color:'#7ee08a',text:'+1',sfx:'heal'},speed:{mark:'»',color:'#6fe3ff',text:'加速！',sfx:'boost'},skill:{mark:'★',color:'#c99bff',text:'スキル+1',sfx:'charge'}};
+const ITEM_KEYS=['heal','speed','skill'];  // 通信ではこの番号で送る
+// 拾えるか：回復は体力が減っているとき、スキルは回数が減っているとき。足早はいつでも拾えて、効果時間が最初からになる
+const canPickItem=(u,type)=>type==='heal'?u.hp<C.HP:type==='skill'?u.sk<C.SKILL_USES:true;
+// Bot が拾いに行くか：拾えるもののうち、足早は効果が切れているときだけ
+const wantsItem=(u,type)=>canPickItem(u,type)&&(type!=='speed'||u.spd<=0);
+function spawnItem(){
+  const z=G.zone;
+  for(let k=0;k<30;k++){const a=Math.random()*TAU,d=Math.sqrt(Math.random())*z.r*.85,x=z.x+Math.cos(a)*d,y=z.y+Math.sin(a)*d;
+    if(x<60||y<60||x>C.MAP-60||y>C.MAP-60)continue;
+    if(G.obs.some(o=>circleRect({x,y},o)))continue;
+    const r=Math.random(),type=r<C.SKILL_ITEM_RATE?'skill':r<(1+C.SKILL_ITEM_RATE)/2?'heal':'speed';
+    G.items.push({id:++G.itemN,type,x,y});return;}
+}
+function stepItems(dt){
+  G.itemT-=dt;if(G.itemT<=0){G.itemT=C.ITEM_EVERY;if(G.items.length<C.ITEM_MAX)spawnItem();}
+}
+function pickItems(u){
+  for(const it of G.items){if(Math.hypot(it.x-u.x,it.y-u.y)>C.R+16)continue;
+    if(!canPickItem(u,it.type))continue;
+    if(it.type==='heal')u.hp++;else if(it.type==='skill')u.sk++;else u.spd=C.SPEED_TIME;
+    G.items=G.items.filter(x=>x!==it);fxItem(u,it.type);ev(['i',u.id,it.type]);return;}
+}
+
 // ===== 演出（全員の画面で再生） =====
 function spark(x,y,color){const a=Math.random()*TAU,s=80+Math.random()*160;G.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:.35,color});}
-function fxBlock(x,y,v){for(let i=0;i<6;i++)spark(x,y,'#cfe8ff');G.texts.push({x:v?v.x:x,y:(v?v.y:y)-34,txt:'防御',life:.6,color:'#cfe8ff'});}
-function fxHit(v){if(!v)return;v.flash=.18;v.inv=Math.max(v.inv||0,C.INVULN);for(let i=0;i<8;i++)spark(v.x,v.y,CLS[v.cls].color);G.texts.push({x:v.x,y:v.y-34,txt:'-1',life:.7,color:'#fff'});}
-function fxZone(v){if(!v)return;v.flash=.2;G.texts.push({x:v.x,y:v.y-34,txt:'-1',life:.7,color:'#ffb3bd'});}
-function fxKill(v,src){if(!v)return;v.alive=false;for(let i=0;i<22;i++)spark(v.x,v.y,CLS[v.cls].color);
+function fxBlock(x,y,v){sfxAt('block',x,y);for(let i=0;i<6;i++)spark(x,y,'#cfe8ff');G.texts.push({x:v?v.x:x,y:(v?v.y:y)-34,txt:'防御',life:.6,color:'#cfe8ff'});}
+function fxHit(v){if(!v)return;sfxAt('hit',v.x,v.y);v.flash=.18;v.inv=Math.max(v.inv||0,C.INVULN);for(let i=0;i<8;i++)spark(v.x,v.y,CLS[v.cls].color);G.texts.push({x:v.x,y:v.y-34,txt:'-1',life:.7,color:'#fff'});}
+function fxSkill(u){if(!u)return;const k=CLS[u.cls];sfxAt('skill',u.x,u.y);
+  G.texts.push({x:u.x,y:u.y-46,txt:k.skill+'！',life:.9,color:k.color});
+  if(u.cls==='tank')G.rings.push({x:u.x,y:u.y,r:C.R,to:k.waveR+C.R,life:.3});
+  else for(let i=0;i<12;i++)spark(u.x,u.y,u.cls==='melee'?'#fff':k.color);}
+function fxItem(u,type){if(!u)return;const I=ITEMS[type];sfxAt(I.sfx,u.x,u.y);for(let i=0;i<10;i++)spark(u.x,u.y,I.color);
+  G.texts.push({x:u.x,y:u.y-34,txt:I.text,life:.8,color:I.color});}
+function fxZone(v){if(!v)return;if(v.id===myId)sfx('zone',.8);v.flash=.2;G.texts.push({x:v.x,y:v.y-34,txt:'-1',life:.7,color:'#ffb3bd'});}
+function fxKill(v,src){if(!v)return;sfxAt('ko',v.x,v.y);v.alive=false;for(let i=0;i<22;i++)spark(v.x,v.y,CLS[v.cls].color);
   feed(src?`${src.name}（${CLS[src.cls].mark}）が ${v.name}（${CLS[v.cls].mark}）を倒した`:`${v.name}（${CLS[v.cls].mark}）が安全地帯の外で倒れた`);}
 function feed(t){const f=$('feed'),s=document.createElement('span');s.textContent=t;f.prepend(s);
   while(f.children.length>4)f.lastChild.remove();setTimeout(()=>{s.style.opacity=0;setTimeout(()=>s.remove(),450);},4000);}
@@ -311,6 +445,8 @@ function pickTarget(u){
   for(const v of G.units){if(v===u||!v.alive)continue;const d=Math.hypot(v.x-u.x,v.y-u.y);if(d>760)continue;const s=d*w[v.cls];if(s<bs){bs=s;best=v;}}
   return best;
 }
+// Bot がスキルを使ってよいか（残りがあり、前回から5〜10秒たっている）
+function botSkillReady(u){if(u.sk<1||u.skCd>0||G.time<(u.ai.skAt||0))return false;u.ai.skAt=G.time+5+Math.random()*5;return true;}
 function botThink(u,dt){
   const ai=u.ai;ai.t-=dt;ai.strafeT-=dt;if(ai.strafeT<=0){ai.side*=-1;ai.strafeT=.7+Math.random()*1.5;}
   if(ai.t<=0){ai.t=.25;ai.target=pickTarget(u);}
@@ -324,6 +460,7 @@ function botThink(u,dt){
       const tt=d/CLS.ranged.proj,px=tg.x+tg.vx*tt,py=tg.y+tg.vy*tt;
       const a=Math.atan2(py-u.y,px-u.x)+(Math.random()-.5)*.24;u.face=a;
       if(d<CLS.ranged.range-10&&!shielded)attack(u,a);
+      else if(shielded&&d<CLS.ranged.pierceRange-40&&botSkillReady(u))useSkill(u,a);  // 盾で防がれる相手には貫通弾
     }else if(u.cls==='melee'){
       let gx=tg.x,gy=tg.y;
       if(tg.cls==='tank'){const cur=Math.atan2(u.y-tg.y,u.x-tg.x),diff=angDiff(tg.face+Math.PI,cur),step=Math.max(-1.1,Math.min(1.1,diff)),orb=d>120?80:44;
@@ -332,15 +469,23 @@ function botThink(u,dt){
       if(tg.cls==='ranged'&&d>100){mx+=-ny*ai.side*.6;my+=nx*ai.side*.6;}
       const a=Math.atan2(dy,dx);u.face=a;
       if(d<CLS.melee.range+C.R-4&&!inFront(tg,u.x,u.y))attack(u,a);
+      else if(d>110&&d<240&&botSkillReady(u))useSkill(u,a);  // 離れた相手に無敵ダッシュで詰める
     }else{
       if(d>46){mx=nx;my=ny;}
       const a=Math.atan2(dy,dx);turnTo(u,a,dt);
       if(d<CLS.tank.range+C.R-4&&Math.abs(angDiff(a,u.face))<.55)attack(u,u.face);
+      // 囲まれたとき、または背中側に近づかれたときに衝撃波
+      const near=G.units.filter(v=>v!==u&&v.alive&&Math.hypot(v.x-u.x,v.y-u.y)<=CLS.tank.waveR+C.R).length;
+      if((near>=2||(near>=1&&d<=CLS.tank.waveR+C.R&&Math.abs(angDiff(a,u.face))>CLS.tank.shield))&&botSkillReady(u))useSkill(u,u.face);
     }
   }
   const z=G.zone,dz=Math.hypot(u.x-z.x,u.y-z.y)||1;
   if(!tg){mx=(z.x-u.x)/dz*.6+Math.cos(G.time*.3+u.name.length)*.5;my=(z.y-u.y)/dz*.6+Math.sin(G.time*.3)*.5;}
   if(dz>z.r-70){const k=dz>z.r?2.2:1;mx+=(z.x-u.x)/dz*k;my+=(z.y-u.y)/dz*k;}
+  // 近くに欲しいアイテムがあれば（敵が近くにいなければ）拾いに行く。安全地帯の端にいるときと、地帯の外のアイテムは追わない
+  const want=dz>z.r-70?null:G.items.filter(it=>wantsItem(u,it.type)&&Math.hypot(it.x-z.x,it.y-z.y)<z.r-40)
+    .map(it=>({it,d:Math.hypot(it.x-u.x,it.y-u.y)})).filter(o=>o.d<260).sort((a,b)=>a.d-b.d)[0];
+  if(want&&(!tg||Math.hypot(tg.x-u.x,tg.y-u.y)>200)){const d=want.d||1;mx=(want.it.x-u.x)/d*1.4;my=(want.it.y-u.y)/d*1.4;}
   if(ai.nudge>0){ai.nudge-=dt;mx+=Math.cos(ai.na)*1.5;my+=Math.sin(ai.na)*1.5;}
   const l=Math.hypot(mx,my);
   if(l>0){mx/=l;my/=l;if(u.cls==='tank'&&!tg)turnTo(u,Math.atan2(my,mx),dt);}
@@ -350,7 +495,8 @@ function botThink(u,dt){
 // ===== 入力 =====
 const keys={};let mouse={x:0,y:0,down:false,used:false};
 const touch={move:null,aim:null};
-addEventListener('keydown',e=>{if(e.target&&e.target.tagName==='INPUT')return;keys[e.key.toLowerCase()]=true;if(e.key===' ')mouse.down=true;});
+addEventListener('keydown',e=>{if(e.target&&e.target.tagName==='INPUT')return;keys[e.key.toLowerCase()]=true;if(e.key===' ')mouse.down=true;
+  if(e.key.toLowerCase()==='e'&&!e.repeat)skillPress();});
 addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;if(e.key===' ')mouse.down=false;});
 cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;mouse.used=true;});
 cv.addEventListener('mousedown',e=>{mouse.down=true;mouse.used=true;mouse.x=e.clientX;mouse.y=e.clientY;});
@@ -374,6 +520,15 @@ function autoAim(p){
 function firePlayerTouch(o){const p=player();if(!p||!p.alive||!G||G.over)return;
   const dx=o.x-o.ox,dy=o.y-o.oy,dir=Math.hypot(dx,dy)>14?Math.atan2(dy,dx):autoAim(p);
   if(MODE==='client'){NET.n++;NET.d=dir;NET.lastInp='';}else attack(p,dir);}
+// スキルの向き：近距離は移動している方向（止まっていれば向いている方向）、それ以外はマウスかタッチの照準（なければ近くの相手）
+function skillDir(p){
+  const I=readInput(p);
+  if(p.cls==='melee')return (I.mx||I.my)?Math.atan2(I.my,I.mx):p.face;
+  return (mouse.used||touch.aim)&&I.aim!==null?I.aim:autoAim(p);
+}
+function skillPress(){const p=player();if(!p||!p.alive||!G||G.over||G.time<0||p.sk<1)return;
+  const dir=skillDir(p);
+  if(MODE==='client'){NET.k++;NET.kd=dir;NET.lastInp='';}else useSkill(p,dir);}
 function readInput(p){
   let mx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0),my=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0);
   if(touch.move){const dx=touch.move.x-touch.move.ox,dy=touch.move.y-touch.move.oy,l=Math.hypot(dx,dy);if(l>6){const s=Math.min(1,l/50);mx=dx/l*s;my=dy/l*s;}}
@@ -397,6 +552,8 @@ function remoteUpdate(u,dt){
   if(inp.f)attack(u,u.aim);
   const n=+inp.n||0;
   if(u.lastN<0)u.lastN=n;else if(n>u.lastN){u.lastN=n;attack(u,isFinite(+inp.d)?+inp.d:u.face);}
+  const k=+inp.k||0;
+  if(u.lastK<0)u.lastK=k;else if(k>u.lastK){u.lastK=k;useSkill(u,isFinite(+inp.kd)?+inp.kd:u.face);}
   return[mx,my];
 }
 
@@ -406,15 +563,21 @@ function step(dt){
   // 開始前のカウントダウン中（G.time<0）は誰も動けない。時間だけ進めて全員に配る
   if(G.time<0){fxStep(dt);if(MODE==='host'&&NET.phase==='play'&&performance.now()-NET.sendT>=C.SEND_MS)publish();updateHud();return;}
   const z=G.zone,t=Math.max(0,Math.min(1,(G.time-C.ZONE_START)/C.ZONE_DUR));z.r=C.ZONE_R0+(C.ZONE_R1-C.ZONE_R0)*t;
+  stepItems(dt);
   for(const u of G.units){if(!u.alive)continue;
-    u.cd=Math.max(0,u.cd-dt);
+    u.cd=Math.max(0,u.cd-dt);u.skCd=Math.max(0,u.skCd-dt);
     const K=CLS[u.cls];if(u.ammo<K.ammo){u.rl+=dt;if(u.rl>=K.reload){u.ammo++;u.rl=0;}}else u.rl=0;
     u.inv=Math.max(0,u.inv-dt);u.flash=Math.max(0,u.flash-dt);if(u.swing){u.swing.t-=dt;if(u.swing.t<=0)u.swing=null;}
     const ctrl=u.ctrl==='local'?'local':(MODE==='host'&&u.remote&&NET.peerSet.has(u.id))?'remote':'bot';
     const [mx,my]=ctrl==='local'?playerUpdate(u,dt):ctrl==='remote'?remoteUpdate(u,dt):botThink(u,dt);
-    const sp=CLS[u.cls].speed,ox=u.x,oy=u.y;u.x+=mx*sp*dt;u.y+=my*sp*dt;
+    if(u.spd>0)u.spd=Math.max(0,u.spd-dt);
+    const sp=CLS[u.cls].speed*(u.spd>0?C.SPEED_MUL:1),ox=u.x,oy=u.y;u.x+=mx*sp*dt;u.y+=my*sp*dt;
     if(u.kb){u.x+=u.kb.x*u.kb.sp*dt;u.y+=u.kb.y*u.kb.sp*dt;u.kb.t-=dt;if(u.kb.t<=0)u.kb=null;}
-    resolve(u);
+    if(u.dash){  // 速いので、壁をすり抜けないよう小刻みに動かして毎回ぶつかり判定をする
+      const d=u.dash.sp*Math.min(dt,u.dash.t),n=Math.ceil(d/(C.R*.5));
+      for(let i=0;i<n;i++){u.x+=u.dash.x*d/n;u.y+=u.dash.y*d/n;resolve(u);}
+      u.dash.t-=dt;if(u.dash.t<=0)u.dash=null;}
+    resolve(u);pickItems(u);
     u.vx=(u.x-ox)/dt;u.vy=(u.y-oy)/dt;
     if(ctrl==='bot'){const want=Math.hypot(mx,my)*sp*dt,got=Math.hypot(u.x-ox,u.y-oy);
       if(want>0&&got<want*.3){u.ai.stuck+=dt;if(u.ai.stuck>.35){u.ai.stuck=0;u.ai.nudge=.5;u.ai.na=Math.atan2(my,mx)+(Math.random()<.5?1.6:-1.6);}}else u.ai.stuck=0;}
@@ -423,6 +586,8 @@ function step(dt){
   }
   const pR=CLS.ranged.projR;
   for(const pr of G.proj){pr.x+=pr.vx*dt;pr.y+=pr.vy*dt;pr.life-=dt;
+    if(pr.pierce){for(const v of G.units){if(v===pr.owner||!v.alive||pr.hits.has(v))continue;  // 貫通弾は壁も盾も無視、同じ相手には1回だけ
+        if(Math.hypot(v.x-pr.x,v.y-pr.y)<C.R+pR*.85){pr.hits.add(v);hit(v,pr.owner,Math.atan2(pr.vy,pr.vx));}}continue;}
     if(G.obs.some(o=>{const cx=Math.max(o.x,Math.min(pr.x,o.x+o.w)),cy=Math.max(o.y,Math.min(pr.y,o.y+o.h));return Math.hypot(pr.x-cx,pr.y-cy)<pR*.5;})){pr.life=0;for(let i=0;i<5;i++)spark(pr.x,pr.y,'#8aa');continue;}
     for(const v of G.units){if(v===pr.owner||!v.alive)continue;
       if(Math.hypot(v.x-pr.x,v.y-pr.y)<C.R+pR*.85){pr.life=0;
@@ -437,6 +602,7 @@ function step(dt){
 function fxStep(dt){
   for(const p of G.parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=.9;p.vy*=.9;p.life-=dt;}G.parts=G.parts.filter(p=>p.life>0);
   for(const t of G.texts){t.y-=30*dt;t.life-=dt;}G.texts=G.texts.filter(t=>t.life>0);
+  for(const r of G.rings){r.life-=dt;r.r+=(r.to-r.r)*Math.min(1,dt*14);}G.rings=G.rings.filter(r=>r.life>0);
   const p=player();let f=p;
   if(!p||!p.alive){f=(G.killer&&G.killer.alive)?G.killer:G.units.find(u=>u.alive)||p||G.units[0];}
   if(f){G.cam.x+=(f.x-G.cam.x)*Math.min(1,dt*8);G.cam.y+=(f.y-G.cam.y)*Math.min(1,dt*8);}
@@ -447,6 +613,9 @@ function updateHud(){
   const out=!!(p&&p.alive&&Math.hypot(p.x-G.zone.x,p.y-G.zone.y)>G.zone.r);
   zc.className='chip'+(out?' warn':'');
   zc.textContent=out?'安全地帯の外！':G.time<C.ZONE_START?`縮小まで ${Math.ceil(C.ZONE_START-G.time)}秒`:G.zone.r>C.ZONE_R1+1?'安全地帯 縮小中':'安全地帯 最小';
+  const sb=$('skillBtn'),show=!!(p&&p.alive&&!G.over&&$('result').hidden);sb.hidden=!show;
+  if(show){const k=CLS[p.cls],sig=p.cls+p.sk+(G.time<0);if(sb.dataset.sig!==sig){sb.dataset.sig=sig;sb.style.setProperty('--c',k.color);
+    sb.innerHTML=`<span>${k.skill}</span><b>×${p.sk}</b>`;sb.disabled=p.sk<1||G.time<0;}}
   const mc=$('modeChip');
   mc.textContent=MODE==='solo'?'Bot練習':`部屋 ${(NET.code||'').toUpperCase()}${!p?'・観戦中':p.alive?'':'・観戦中'}${MODE==='host'?'・ホスト':''}`;
 }
@@ -473,13 +642,14 @@ async function peerOpts(){
 // （回線が突然切れたときは WebRTC の close が来ないことがあるため）
 const HB_MS=1000, HB_TIMEOUT_MS=15000;
 const NET={ok:false,R:null,code:null,me:null,j:0,joinedAt:0,nick:'',phase:'lobby',amHost:false,
-  lastS:null,lastSnap:null,lastHostPh:null,inputs:{},peerSet:new Set(),n:0,d:0,lastInp:'',inpT:0,sendT:0,bots:true,lobbySig:'',trim:false};
+  lastS:null,lastSnap:null,lastHostPh:null,inputs:{},peerSet:new Set(),n:0,d:0,k:0,kd:0,lastInp:'',inpT:0,sendT:0,bots:true,lobbySig:'',trim:false};
 function setP(patch){return NET.R?NET.R.presence(patch):Promise.resolve();}
 const byJ=(a,b)=>(a.presence.j-b.presence.j)||(a.peer<b.peer?-1:a.peer>b.peer?1:0);
 function snap(){
   const s={g:G.gid,t:Math.round(G.time*10)/10,z:Math.round(G.zone.r),o:G.over?1:0,n:{},
-    u:G.units.map(x=>[x.id,CLS_KEYS.indexOf(x.cls),Math.round(x.x),Math.round(x.y),Math.round(x.face*100),x.hp,x.ammo,Math.round(x.rl/CLS[x.cls].reload*10),x.alive?1:0,x.kills,x.place,Math.round(x.vx),Math.round(x.vy)]),
-    p:G.proj.map(q=>[Math.round(q.x),Math.round(q.y),Math.round(q.vx),Math.round(q.vy)]),
+    u:G.units.map(x=>[x.id,CLS_KEYS.indexOf(x.cls),Math.round(x.x),Math.round(x.y),Math.round(x.face*100),x.hp,x.ammo,Math.round(x.rl/CLS[x.cls].reload*10),x.alive?1:0,x.kills,x.place,Math.round(x.vx),Math.round(x.vy),Math.round((x.spd||0)*10),x.sk]),
+    i:G.items.map(it=>[it.id,ITEM_KEYS.indexOf(it.type),Math.round(it.x),Math.round(it.y)]),
+    p:G.proj.map(q=>[Math.round(q.x),Math.round(q.y),Math.round(q.vx),Math.round(q.vy),q.pierce?1:0]),
     e:G.ev.slice()};
   G.units.forEach(x=>s.n[x.id]=x.name);
   if(NET.trim||JSON.stringify(s).length>3000){s.e=s.e.slice(-6);s.p=s.p.slice(-10);}
@@ -490,7 +660,7 @@ function publish(){NET.sendT=performance.now();setP({ph:NET.phase,s:snap()});}
 function applySnap(s){
   if(!s||typeof s!=='object'||!Array.isArray(s.u))return;
   if(!G||!G.net||G.gid!==String(s.g)){
-    G={net:true,gid:String(s.g),units:[],byId:{},obs:makeObstacles(),proj:[],parts:[],texts:[],time:0,zone:{x:C.MAP/2,y:C.MAP/2,r:C.ZONE_R0},
+    G={net:true,gid:String(s.g),units:[],byId:{},obs:makeObstacles(),proj:[],items:[],parts:[],texts:[],rings:[],time:0,zone:{x:C.MAP/2,y:C.MAP/2,r:C.ZONE_R0},
       over:false,ended:false,killer:null,cam:{x:C.MAP/2,y:C.MAP/2},lastEv:Math.max(0,...(Array.isArray(s.e)?s.e:[]).map(e=>+e[0]||0)),snapAt:0,first:true};
     showPlay();
   }
@@ -501,17 +671,21 @@ function applySnap(s){
     let u=G.byId[id];
     if(!u){u={id,cls,x:+r[2]||0,y:+r[3]||0,face:0,hp:3,ammo:3,rl:0,alive:true,inv:0,flash:0,swing:null,kills:0,place:0,name:'',sx:0,sy:0,vx:0,vy:0};G.byId[id]=u;G.units.push(u);}
     u.sx=+r[2]||0;u.sy=+r[3]||0;u.face=(+r[4]||0)/100;u.hp=+r[5]||0;u.ammo=+r[6]||0;u.rl=(+r[7]||0)/10*CLS[cls].reload;
-    u.alive=!!r[8];u.kills=+r[9]||0;u.place=+r[10]||0;u.vx=+r[11]||0;u.vy=+r[12]||0;u.name=cleanNick(names[id]);
+    u.alive=!!r[8];u.kills=+r[9]||0;u.place=+r[10]||0;u.vx=+r[11]||0;u.vy=+r[12]||0;u.spd=(+r[13]||0)/10;u.sk=Math.max(0,+r[14]||0);u.name=cleanNick(names[id]);
   }
-  G.proj=(Array.isArray(s.p)?s.p:[]).slice(0,40).map(q=>({x:+q[0]||0,y:+q[1]||0,vx:+q[2]||0,vy:+q[3]||0}));
+  G.items=(Array.isArray(s.i)?s.i:[]).slice(0,10).filter(q=>Array.isArray(q)&&ITEM_KEYS[q[1]]).map(q=>({id:+q[0]||0,type:ITEM_KEYS[q[1]],x:+q[2]||0,y:+q[3]||0}));
+  G.proj=(Array.isArray(s.p)?s.p:[]).slice(0,40).map(q=>({x:+q[0]||0,y:+q[1]||0,vx:+q[2]||0,vy:+q[3]||0,pierce:q[4]===1}));
   for(const e of (Array.isArray(s.e)?s.e:[])){if(!Array.isArray(e))continue;const i=+e[0]||0;if(i>G.lastEv){G.lastEv=i;replay(e);}}
   if(G.first){const f=player()||G.units[0];if(f){G.cam.x=f.x;G.cam.y=f.y;}G.first=false;}
 }
 function replay(e){
   const t=e[1],U=G.byId,u=U[String(e[2])];
-  if(t==='s'&&u)u.swing={dir:(+e[3]||0)/100,t:.14};
+  if(t==='s'&&u){u.swing={dir:(+e[3]||0)/100,t:.14};sfxAt('swing',u.x,u.y,.8);}
   else if(t==='h')fxHit(u);
   else if(t==='z')fxZone(u);
+  else if(t==='S')fxSkill(u);
+  else if(t==='f'&&u)sfxAt('shot',u.x,u.y,.7);
+  else if(t==='i'&&ITEM_KEYS.includes(e[3]))fxItem(u,e[3]);
   else if(t==='b')fxBlock(+e[3]||0,+e[4]||0,u);
   else if(t==='k'){const src=e[3]?U[String(e[3])]:null;if(u)fxKill(u,src||null);if(u&&u.id===myId)G.killer=src||null;}
 }
@@ -528,7 +702,7 @@ function clientStep(dt){
   if(p&&p.alive&&!G.over){
     const I=readInput(p);
     if(I.aim!==null&&p.cls!=='tank')p.face=I.aim;
-    const inp={x:r2(I.mx),y:r2(I.my),a:I.aim===null?null:r2(I.aim),f:I.fire?1:0,n:NET.n,d:r2(NET.d)};
+    const inp={x:r2(I.mx),y:r2(I.my),a:I.aim===null?null:r2(I.aim),f:I.fire?1:0,n:NET.n,d:r2(NET.d),k:NET.k,kd:r2(NET.kd)};
     const txt=JSON.stringify(inp),now=performance.now();
     if(txt!==NET.lastInp&&(now-NET.inpT>=33||NET.lastInp==='')){NET.lastInp=txt;NET.inpT=now;setP({inp});}
   }
@@ -594,7 +768,10 @@ function hostStart(){
   const list=ps.map(p=>({id:p.peer,name:cleanNick(p.presence.nick),cls:isCls(p.presence.cls)?p.presence.cls:'ranged',ctrl:p.sameTab?'local':'remote',remote:!p.sameTab}));
   if(NET.bots)fillBots(list,C.FILL_TO);
   if(list.length<2)return;
-  myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;showPlay();publish();
+  myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;
+  // 参加者の攻撃・スキルの押下カウンタは試合開始時の値を基準にする（開始直後の最初の1回も取りこぼさない）
+  for(const u of G.units)if(u.remote){const i=NET.inputs[u.id]||{};u.lastN=+i.n||0;u.lastK=+i.k||0;}
+  showPlay();publish();
 }
 
 // ----- PeerJS で room（peers / presence）と同じ形の部屋を作る -----
@@ -605,7 +782,7 @@ function cleanPresence(p){
   if(typeof p.nick==='string')o.nick=cleanNick(p.nick);
   if(isCls(p.cls))o.cls=p.cls;
   if(typeof p.j==='number'&&isFinite(p.j))o.j=Math.max(1,p.j);
-  if(p.inp&&typeof p.inp==='object'){const i=p.inp;o.inp={x:+i.x||0,y:+i.y||0,a:(i.a===null||i.a===undefined)?null:(+i.a||0),f:i.f?1:0,n:+i.n||0,d:+i.d||0};}
+  if(p.inp&&typeof p.inp==='object'){const i=p.inp;o.inp={x:+i.x||0,y:+i.y||0,a:(i.a===null||i.a===undefined)?null:(+i.a||0),f:i.f?1:0,n:+i.n||0,d:+i.d||0,k:+i.k||0,kd:+i.kd||0};}
   return o;
 }
 function makeHub(code,opts){return new Promise((res,rej)=>{
@@ -697,16 +874,17 @@ addEventListener('pagehide',()=>{if(NET.R)NET.R.leave();});
 // ===== 画面切り替え =====
 function showOnly(w){
   $('start').hidden=w!=='start';$('lobby').hidden=w!=='lobby';$('result').hidden=w!=='result';
-  $('hud').hidden=!(w==='play'||w==='result');$('hint').hidden=w!=='play';
+  $('hud').hidden=!(w==='play'||w==='result');$('hint').hidden=w!=='play';if(w!=='play')$('skillBtn').hidden=true;
   if(w==='start'||w==='lobby')$('feed').innerHTML='';
+  $('soundBtn2').hidden=!$('hud').hidden;bgmWant(w==='play'?'battle':'lobby');
 }
 function showPlay(){
   showOnly('play');$('feed').innerHTML='';
-  $('hint').textContent=matchMedia('(pointer:coarse)').matches?'左：移動　右：タップで自動照準／なぞって離して攻撃':'WASD：移動　マウス：照準　クリック：攻撃';
+  $('hint').textContent=matchMedia('(pointer:coarse)').matches?'左：移動　右：タップで自動照準／なぞって離して攻撃　丸ボタン：スキル':'WASD：移動　マウス：照準　クリック：攻撃　E：スキル';
 }
 function showResult(){
   const p=player(),place=p.place||1;
-  $('resTitle').textContent=place===1&&p.alive?'優勝！':`${place}位`;
+  $('resTitle').textContent=place===1&&p.alive?'優勝！':`${place}位`;sfx(place===1&&p.alive?'win':'lose');
   $('resStats').textContent=`キャラ：${CLS[p.cls].name}　倒した数：${p.kills}　生存時間：${Math.round(G.time)}秒`+(G.killer?`　倒した相手：${G.killer.name}（${CLS[G.killer.cls].name}）`:'');
   $('rank').innerHTML='';$('resMsg').textContent='';
   const b=$('resBtns');b.innerHTML='';
@@ -716,7 +894,7 @@ function showResult(){
 }
 function showNetResult(){
   const p=player();
-  $('resTitle').textContent=p?(p.place===1?'優勝！':`${p.place||'-'}位`):'試合終了';
+  $('resTitle').textContent=p?(p.place===1?'優勝！':`${p.place||'-'}位`):'試合終了';if(p)sfx(p.place===1?'win':'lose');
   $('resStats').textContent=p?`キャラ：${CLS[p.cls].name}　倒した数：${p.kills}`:'観戦していました';
   const ol=$('rank');ol.innerHTML='';
   G.units.slice().sort((a,b)=>(a.place||99)-(b.place||99)).forEach(u=>{
@@ -756,12 +934,17 @@ function draw(){
       ctx.fillStyle='rgba(255,255,255,.16)';
       if(p.cls==='ranged'){ctx.save();ctx.translate(p.x,p.y);ctx.rotate(a);ctx.fillRect(C.R,-k.projR,k.range-C.R,k.projR*2);ctx.restore();}
       else{ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.arc(p.x,p.y,k.range+C.R,a-k.arc/2,a+k.arc/2);ctx.closePath();ctx.fill();}}}}
+  for(const it of G.items)drawItem(it,font);
   for(const u of G.units)if(u.alive)drawUnit(u,font);
   const age=G.net?Math.min(.2,(performance.now()-G.snapAt)/1000):0,pR=CLS.ranged.projR;
   for(const pr of G.proj){const x=pr.x+pr.vx*age,y=pr.y+pr.vy*age;
+    if(pr.pierce){ctx.save();ctx.translate(x,y);ctx.rotate(Math.atan2(pr.vy,pr.vx));  // 貫通弾：白く細長い弾
+      ctx.fillStyle='rgba(255,246,220,.35)';ctx.beginPath();ctx.ellipse(-18,0,34,pR*.7,0,0,TAU);ctx.fill();
+      ctx.fillStyle='#fff6dc';ctx.beginPath();ctx.ellipse(0,0,pR*1.3,pR*.6,0,0,TAU);ctx.fill();ctx.restore();continue;}
     ctx.fillStyle='rgba(242,179,61,.25)';ctx.beginPath();ctx.arc(x-pr.vx*.03,y-pr.vy*.03,pR*.8,0,TAU);ctx.fill();
     ctx.fillStyle=CLS.ranged.color;ctx.beginPath();ctx.arc(x,y,pR,0,TAU);ctx.fill();
     ctx.fillStyle='#fff6dc';ctx.beginPath();ctx.arc(x,y,pR*.45,0,TAU);ctx.fill();}
+  for(const r of G.rings){ctx.globalAlpha=Math.max(0,r.life/.3);ctx.strokeStyle='#cfe8ff';ctx.lineWidth=8;ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,TAU);ctx.stroke();}ctx.globalAlpha=1;
   for(const pa of G.parts){ctx.globalAlpha=Math.max(0,pa.life/.35);ctx.fillStyle=pa.color;ctx.fillRect(pa.x-2.5,pa.y-2.5,5,5);}ctx.globalAlpha=1;
   ctx.fillStyle='rgba(214,69,90,.22)';ctx.beginPath();ctx.rect(-2000,-2000,M+4000,M+4000);ctx.arc(G.zone.x,G.zone.y,G.zone.r,0,TAU,true);ctx.fill();
   ctx.strokeStyle='rgba(255,140,155,.85)';ctx.lineWidth=4;ctx.beginPath();ctx.arc(G.zone.x,G.zone.y,G.zone.r,0,TAU);ctx.stroke();
@@ -778,12 +961,20 @@ function draw(){
   if(touch.aim){const o=touch.aim;ctx.strokeStyle='rgba(239,93,114,.5)';ctx.beginPath();ctx.arc(o.ox,o.oy,50,0,TAU);ctx.stroke();
     const dx=o.x-o.ox,dy=o.y-o.oy,l=Math.hypot(dx,dy),s=l>50?50/l:1;ctx.fillStyle='rgba(239,93,114,.6)';ctx.beginPath();ctx.arc(o.ox+dx*s,o.oy+dy*s,20,0,TAU);ctx.fill();}
 }
+function drawItem(it,font){
+  const y=it.y+Math.sin(performance.now()/300+it.id)*3,I=ITEMS[it.type],c=I.color;
+  ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(it.x,it.y+20,16,6,0,0,TAU);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=3;ctx.fillStyle=c;ctx.beginPath();ctx.arc(it.x,y,19,0,TAU);ctx.fill();ctx.stroke();
+  ctx.fillStyle='#132022';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='800 24px '+font;ctx.fillText(I.mark,it.x,y+1);
+}
 function rr(x,y,w,h,r){ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,r);else ctx.rect(x,y,w,h);}
 function drawUnit(u,font){
   const k=CLS[u.cls],R=C.R;
   ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(u.x,u.y+R*.8,R,R*.45,0,0,TAU);ctx.fill();
   if(u.swing){ctx.fillStyle='rgba(255,255,255,.28)';ctx.beginPath();ctx.moveTo(u.x,u.y);ctx.arc(u.x,u.y,k.range+R,u.swing.dir-k.arc/2,u.swing.dir+k.arc/2);ctx.closePath();ctx.fill();}
   if(u.id===myId){ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.arc(u.x,u.y,R+12,0,TAU);ctx.stroke();}
+  if(u.spd>0){ctx.strokeStyle='rgba(111,227,255,.7)';ctx.lineWidth=3;ctx.setLineDash([6,6]);ctx.lineDashOffset=-performance.now()/30;
+    ctx.beginPath();ctx.arc(u.x,u.y,R+5,0,TAU);ctx.stroke();ctx.setLineDash([]);ctx.lineDashOffset=0;}
   ctx.globalAlpha=u.inv>0&&Math.floor(u.inv*30)%2?0.55:1;
   ctx.fillStyle=u.flash>0?'#fff':k.color;ctx.beginPath();ctx.arc(u.x,u.y,R,0,TAU);ctx.fill();
   ctx.beginPath();ctx.moveTo(u.x+Math.cos(u.face)*(R+9),u.y+Math.sin(u.face)*(R+9));
@@ -798,12 +989,17 @@ function drawUnit(u,font){
   ctx.fillStyle='rgba(238,243,239,.85)';ctx.font='500 11px '+font;ctx.textBaseline='alphabetic';ctx.fillText(u.name,u.x,u.y+R+22);
 }
 
+// カウントダウンの「3・2・1」で tick、「スタート！」で go を鳴らす（オンライン対戦のみ）
+function soundTick(){
+  const n=G&&MODE!=='solo'&&G.time<0?Math.ceil(-G.time-1e-6):0;
+  if(n!==SND.lastCd){if(n>0)sfx('tick');else if(SND.lastCd>0)sfx('go');SND.lastCd=n;}
+}
 let last=performance.now();
 function frame(now){const dt=Math.min(.05,Math.max(0,(now-last)/1000));last=now;
   try{
     if(NET.R)netTick();
     if(G){if(MODE==='client')clientStep(dt);else if(MODE==='solo'||MODE==='host'){if(!G.ended)step(dt);else fxStep(dt);}}
-    draw();
+    soundTick();draw();
   }catch(err){console.error(err);}
   requestAnimationFrame(frame);}
 requestAnimationFrame(frame);
@@ -812,12 +1008,19 @@ requestAnimationFrame(frame);
 function makeCards(box){
   for(const [id,k] of Object.entries(CLS)){
     const b=document.createElement('button');b.className='card';b.dataset.cls=id;b.style.setProperty('--c',k.color);b.setAttribute('aria-pressed',String(id===chosen));
-    b.innerHTML=`<span class="disc">${k.mark}</span><span class="nm">${k.name}</span><span class="bt">${k.beats}</span><p>${k.desc}</p>`;
+    b.innerHTML=`<span class="disc">${k.mark}</span><span class="nm">${k.name}</span><span class="bt">${k.beats}</span><p>${k.desc}</p><p class="sk">スキル「${k.skill}」：${k.skillDesc}（1試合${C.SKILL_USES}回）</p>`;
     b.onclick=()=>pick(id);box.appendChild(b);}
 }
 function pick(id){chosen=id;lsSet('sk-cls',id);document.querySelectorAll('.card').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.cls===id)));if(NET.R)setP({cls:id});}
 function saveNick(){NET.nick=cleanNick($('nick').value);if(NET.nick==='ななし'&&!$('nick').value.trim())NET.nick='ななし';lsSet('sk-nick',NET.nick);if(NET.R)setP({nick:NET.nick});}
 makeCards($('cards'));makeCards($('lobbyCards'));
+addEventListener('pointerdown',sndInit);addEventListener('touchend',sndInit);
+addEventListener('click',e=>{if(e.target.closest&&e.target.closest('.btn,.card'))sfx('click',.5);});
+function soundLabel(){for(const b of document.querySelectorAll('.snd'))b.textContent=SND.on?'音 ON':'音 OFF';}
+// 効果音と BGM をまとめて切り替える。blur：スペースキー（攻撃）で切り替わらないように
+for(const b of document.querySelectorAll('.snd'))b.onclick=()=>{SND.on=!SND.on;lsSet('sk-sound',SND.on?'1':'0');soundLabel();bgmApply();b.blur();};
+soundLabel();bgmWant('lobby');
+$('skillBtn').addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();skillPress();});
 $('nick').value=lsGet('sk-nick')||'';NET.nick=cleanNick($('nick').value);
 $('nick').addEventListener('change',saveNick);
 $('lobbyNick').addEventListener('change',()=>{

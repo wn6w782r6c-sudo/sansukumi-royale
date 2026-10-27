@@ -4,8 +4,8 @@
 
 - 遊ぶ：https://wn6w782r6c-sudo.github.io/sansukumi-royale/
 - 「部屋を作る」→ 表示された招待リンクを友達に送る
-- 試作版（アイテム・固有スキル入り）：https://wn6w782r6c-sudo.github.io/sansukumi-royale/preview/
-- 試作版（アイテム・固有スキル・効果音・BGM・スキル回復アイテム入り）：https://wn6w782r6c-sudo.github.io/sansukumi-royale/preview-sound/
+- アイテム（回復・足早・スキル回復）、固有スキル、効果音、BGM 入り
+- `preview/` と `preview-sound/` は確認用に使った試作版です（本体に取り込み済み）。
   一緒に遊ぶ人は全員、同じ URL を使ってください（版が違うと正しく遊べません）。
 
 このリポジトリは公開用のコピーです。開発は別の非公開リポジトリで行い、
