@@ -296,7 +296,7 @@ function ev(arr){if(MODE!=='host')return;G.evN++;G.ev.push([G.evN,...arr]);if(G.
 function attack(u,dir){
   // 開始前（カウントダウン中）は誰も攻撃できない
   if(u.cd>0||u.ammo<1||!u.alive||G.time<0)return false;const k=CLS[u.cls];u.cd=C.CD;u.ammo--;
-  if(u.cls==='ranged'){u.face=dir;sfxAt('shot',u.x,u.y,.7);
+  if(u.cls==='ranged'){u.face=dir;sfxAt('shot',u.x,u.y,.7);ev(['f',u.id]);  // 発射の合図（参加者はこれで発射音を鳴らす）
     G.proj.push({x:u.x+Math.cos(dir)*(C.R+4),y:u.y+Math.sin(dir)*(C.R+4),vx:Math.cos(dir)*k.proj,vy:Math.sin(dir)*k.proj,life:k.range/k.proj,owner:u});
     return true;}
   if(u.cls==='tank')dir=u.face;
@@ -609,9 +609,7 @@ function applySnap(s){
     u.alive=!!r[8];u.kills=+r[9]||0;u.place=+r[10]||0;u.vx=+r[11]||0;u.vy=+r[12]||0;u.spd=(+r[13]||0)/10;u.sk=Math.max(0,+r[14]||0);u.name=cleanNick(names[id]);
   }
   G.items=(Array.isArray(s.i)?s.i:[]).slice(0,10).filter(Array.isArray).map(q=>({id:+q[0]||0,type:q[1]===0?'heal':'speed',x:+q[2]||0,y:+q[3]||0}));
-  const np=G.proj.length;
   G.proj=(Array.isArray(s.p)?s.p:[]).slice(0,40).map(q=>({x:+q[0]||0,y:+q[1]||0,vx:+q[2]||0,vy:+q[3]||0,pierce:q[4]===1}));
-  for(const q of G.proj.slice(np))sfxAt('shot',q.x,q.y,.7);  // 新しく増えた弾の発射音（ホストは attack() で鳴らす）
   for(const e of (Array.isArray(s.e)?s.e:[])){if(!Array.isArray(e))continue;const i=+e[0]||0;if(i>G.lastEv){G.lastEv=i;replay(e);}}
   if(G.first){const f=player()||G.units[0];if(f){G.cam.x=f.x;G.cam.y=f.y;}G.first=false;}
 }
@@ -621,6 +619,7 @@ function replay(e){
   else if(t==='h')fxHit(u);
   else if(t==='z')fxZone(u);
   else if(t==='S')fxSkill(u);
+  else if(t==='f'&&u)sfxAt('shot',u.x,u.y,.7);
   else if(t==='i')fxItem(u,e[3]==='heal'?'heal':'speed');
   else if(t==='b')fxBlock(+e[3]||0,+e[4]||0,u);
   else if(t==='k'){const src=e[3]?U[String(e[3])]:null;if(u)fxKill(u,src||null);if(u&&u.id===myId)G.killer=src||null;}
