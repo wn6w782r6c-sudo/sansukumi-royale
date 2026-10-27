@@ -405,8 +405,9 @@ function botThink(u,dt){
   const z=G.zone,dz=Math.hypot(u.x-z.x,u.y-z.y)||1;
   if(!tg){mx=(z.x-u.x)/dz*.6+Math.cos(G.time*.3+u.name.length)*.5;my=(z.y-u.y)/dz*.6+Math.sin(G.time*.3)*.5;}
   if(dz>z.r-70){const k=dz>z.r?2.2:1;mx+=(z.x-u.x)/dz*k;my+=(z.y-u.y)/dz*k;}
-  // 近くに欲しいアイテムがあれば（敵が近くにいなければ）拾いに行く
-  const want=G.items.filter(it=>it.type==='heal'?u.hp<C.HP:u.spd<=0).map(it=>({it,d:Math.hypot(it.x-u.x,it.y-u.y)})).filter(o=>o.d<260).sort((a,b)=>a.d-b.d)[0];
+  // 近くに欲しいアイテムがあれば（敵が近くにいなければ）拾いに行く。安全地帯の端にいるときと、地帯の外のアイテムは追わない
+  const want=dz>z.r-70?null:G.items.filter(it=>(it.type==='heal'?u.hp<C.HP:u.spd<=0)&&Math.hypot(it.x-z.x,it.y-z.y)<z.r-40)
+    .map(it=>({it,d:Math.hypot(it.x-u.x,it.y-u.y)})).filter(o=>o.d<260).sort((a,b)=>a.d-b.d)[0];
   if(want&&(!tg||Math.hypot(tg.x-u.x,tg.y-u.y)>200)){const d=want.d||1;mx=(want.it.x-u.x)/d*1.4;my=(want.it.y-u.y)/d*1.4;}
   if(ai.nudge>0){ai.nudge-=dt;mx+=Math.cos(ai.na)*1.5;my+=Math.sin(ai.na)*1.5;}
   const l=Math.hypot(mx,my);
@@ -495,7 +496,10 @@ function step(dt){
     if(u.spd>0)u.spd=Math.max(0,u.spd-dt);
     const sp=CLS[u.cls].speed*(u.spd>0?C.SPEED_MUL:1),ox=u.x,oy=u.y;u.x+=mx*sp*dt;u.y+=my*sp*dt;
     if(u.kb){u.x+=u.kb.x*u.kb.sp*dt;u.y+=u.kb.y*u.kb.sp*dt;u.kb.t-=dt;if(u.kb.t<=0)u.kb=null;}
-    if(u.dash){u.x+=u.dash.x*u.dash.sp*dt;u.y+=u.dash.y*u.dash.sp*dt;u.dash.t-=dt;if(u.dash.t<=0)u.dash=null;}
+    if(u.dash){  // 速いので、壁をすり抜けないよう小刻みに動かして毎回ぶつかり判定をする
+      const d=u.dash.sp*Math.min(dt,u.dash.t),n=Math.ceil(d/(C.R*.5));
+      for(let i=0;i<n;i++){u.x+=u.dash.x*d/n;u.y+=u.dash.y*d/n;resolve(u);}
+      u.dash.t-=dt;if(u.dash.t<=0)u.dash=null;}
     resolve(u);pickItems(u);
     u.vx=(u.x-ox)/dt;u.vy=(u.y-oy)/dt;
     if(ctrl==='bot'){const want=Math.hypot(mx,my)*sp*dt,got=Math.hypot(u.x-ox,u.y-oy);
@@ -686,7 +690,10 @@ function hostStart(){
   const list=ps.map(p=>({id:p.peer,name:cleanNick(p.presence.nick),cls:isCls(p.presence.cls)?p.presence.cls:'ranged',ctrl:p.sameTab?'local':'remote',remote:!p.sameTab}));
   if(NET.bots)fillBots(list,C.FILL_TO);
   if(list.length<2)return;
-  myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;showPlay();publish();
+  myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;
+  // 参加者の攻撃・スキルの押下カウンタは試合開始時の値を基準にする（開始直後の最初の1回も取りこぼさない）
+  for(const u of G.units)if(u.remote){const i=NET.inputs[u.id]||{};u.lastN=+i.n||0;u.lastK=+i.k||0;}
+  showPlay();publish();
 }
 
 // ----- PeerJS で room（peers / presence）と同じ形の部屋を作る -----
