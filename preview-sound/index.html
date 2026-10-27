@@ -400,7 +400,10 @@ function useSkill(u,dir){
 // heal：体力を1回復（満タンのときは拾わない） / speed：しばらく足が速くなる / skill：スキルの残り回数を1戻す（最大のときは拾わない）
 const ITEMS={heal:{mark:'+',color:'#7ee08a',text:'+1',sfx:'heal'},speed:{mark:'»',color:'#6fe3ff',text:'加速！',sfx:'boost'},skill:{mark:'★',color:'#c99bff',text:'スキル+1',sfx:'charge'}};
 const ITEM_KEYS=['heal','speed','skill'];  // 通信ではこの番号で送る
-const wantsItem=(u,type)=>type==='heal'?u.hp<C.HP:type==='skill'?u.sk<C.SKILL_USES:u.spd<=0;
+// 拾えるか：回復は体力が減っているとき、スキルは回数が減っているとき。足早はいつでも拾えて、効果時間が最初からになる
+const canPickItem=(u,type)=>type==='heal'?u.hp<C.HP:type==='skill'?u.sk<C.SKILL_USES:true;
+// Bot が拾いに行くか：拾えるもののうち、足早は効果が切れているときだけ
+const wantsItem=(u,type)=>canPickItem(u,type)&&(type!=='speed'||u.spd<=0);
 function spawnItem(){
   const z=G.zone;
   for(let k=0;k<30;k++){const a=Math.random()*TAU,d=Math.sqrt(Math.random())*z.r*.85,x=z.x+Math.cos(a)*d,y=z.y+Math.sin(a)*d;
@@ -414,7 +417,7 @@ function stepItems(dt){
 }
 function pickItems(u){
   for(const it of G.items){if(Math.hypot(it.x-u.x,it.y-u.y)>C.R+16)continue;
-    if(!wantsItem(u,it.type))continue;
+    if(!canPickItem(u,it.type))continue;
     if(it.type==='heal')u.hp++;else if(it.type==='skill')u.sk++;else u.spd=C.SPEED_TIME;
     G.items=G.items.filter(x=>x!==it);fxItem(u,it.type);ev(['i',u.id,it.type]);return;}
 }
