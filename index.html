@@ -107,6 +107,11 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
 .rank .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rank .me{color:var(--ranged)}
 .invite{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* ルール・チームの選択ボタン（ロビー） */
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg .btn{font-size:13px;padding:8px 12px;border-color:var(--line)}
+.seg .btn[aria-pressed="true"]{border-color:var(--c,var(--ink));box-shadow:0 0 0 2px var(--c,var(--ink)) inset;color:var(--c,var(--ink))}
+.tag.team{border-color:var(--c);color:var(--c);font-weight:800}
 .invite input{flex:1 1 200px;font-size:13px;letter-spacing:0;text-transform:none}
 </style>
 </head>
@@ -152,8 +157,10 @@ input[type=text]:focus{outline:none;border-color:var(--tank)}
     <ul class="members" id="members"></ul>
     <label class="field" for="lobbyNick">ニックネーム（10文字まで）<input type="text" id="lobbyNick" maxlength="10" autocomplete="off" placeholder="例：たろう"></label>
     <div class="status ng" id="nickErr" hidden>その名前は使用できません</div>
+    <div class="field">ルール<div class="seg" id="ruleBtns"></div></div>
+    <div class="field" id="teamRow" hidden>チーム（味方のキャラだけ見えます）<div class="seg" id="teamBtns"></div></div>
     <div class="field">使うキャラ<div class="cards mini" id="lobbyCards"></div></div>
-    <label class="chk" id="botsRow" for="botsChk"><input type="checkbox" id="botsChk" checked> 6人に足りない分をBotで埋める</label>
+    <label class="chk" id="botsRow" for="botsChk"><input type="checkbox" id="botsChk" checked> <span id="botsTxt">6人に足りない分をBotで埋める</span></label>
     <div class="status" id="lobbyMsg"></div>
     <div class="row"><button class="btn primary" id="startBtn">試合開始</button><button class="btn" id="leaveBtn">部屋を出る</button></div>
   </div>
@@ -204,6 +211,16 @@ const CLS = {
 const CLS_KEYS=['ranged','melee','tank'];
 const isCls=c=>CLS_KEYS.includes(c);   // CLS[c] だけだと 'constructor' などの継承プロパティも通ってしまう
 const $=id=>document.getElementById(id);
+// ===== ルール（オンライン対戦のみ。部屋を作った人が選ぶ） =====
+// ffa：個人戦 / team2：2チーム（1チーム4人まで） / pair：ペア戦（2人1組、4組まで）。チーム戦では味方を攻撃できない
+const RULES={ffa:{name:'個人戦'},team2:{name:'2チーム戦',n:2,cap:4},pair:{name:'ペア戦',n:4,cap:2}};
+const RULE_KEYS=['ffa','team2','pair'];
+const TEAM_NAMES=['A','B','C','D'], TEAM_COLORS=['#ff9f43','#2ee6a6','#b28dff','#ff6bd6'];
+const isRule=r=>RULE_KEYS.includes(r);
+// そのルールで有効なチーム番号（おまかせ・範囲外は -1）
+const teamOf=(rule,tm)=>{const R=RULES[rule];return R&&R.n&&Number.isInteger(tm)&&tm>=0&&tm<R.n?tm:-1;};
+// 味方どうしか（個人戦では team が null なので誰も味方ではない）
+const ally=(a,b)=>a.team!=null&&a.team===b.team;
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 
@@ -307,20 +324,45 @@ function fillBots(list,n){
     const min=Math.min(cnt.ranged,cnt.melee,cnt.tank),opts=CLS_KEYS.filter(c=>cnt[c]===min);
     list.push({id:'#b'+k,name:'Bot'+k,cls:opts[Math.floor(Math.random()*opts.length)],ctrl:'bot'});k++;}
 }
+// チーム戦の組み分け。list の tm は本人が選んだチーム（おまかせは未設定）。
+// おまかせの人を空いているチームに入れ、Bot を入れるときは足りないチームを Bot で埋める。
+// 戻り値：{list}（各要素に team が付く）か、始められないときは {err}
+function teamPlan(list,rule,bots){
+  const R=RULES[rule],size=Array(R.n).fill(0),out=list.map(o=>({...o,team:teamOf(rule,o.tm)}));
+  out.forEach(o=>{if(o.team>=0)size[o.team]++;});
+  const over=size.findIndex(n=>n>R.cap);
+  if(over>=0)return{err:`チーム${TEAM_NAMES[over]}は${R.cap}人までです。`};
+  // おまかせの人：ペア戦は相方のいないチームを優先、2チーム戦は人数の少ないチームへ
+  for(const o of out)if(o.team<0){let best=-1,bs=0;
+    for(let t=0;t<R.n;t++){if(size[t]>=R.cap)continue;const sc=R.cap===2?(size[t]===1?0:1):size[t];if(best<0||sc<bs){best=t;bs=sc;}}
+    o.team=best;size[best]++;}
+  if(bots){
+    // 人のいるチームを先に使い、合計が C.FILL_TO 人以上になるようにチーム数と1チームの人数を決める
+    const order=[...size.keys()].sort((a,b)=>(size[b]>0)-(size[a]>0)||a-b);
+    const used=size.filter(n=>n>0).length,nt=Math.min(R.n,Math.max(used,Math.ceil(C.FILL_TO/R.cap)));
+    const per=Math.min(R.cap,Math.max(...size,Math.ceil(C.FILL_TO/nt)));let k=1;
+    for(const t of order.slice(0,nt))while(size[t]<per){
+      const cnt={ranged:0,melee:0,tank:0};out.forEach(o=>{if(o.team===t)cnt[o.cls]++;});  // チームの中でキャラが偏らないように
+      const min=Math.min(cnt.ranged,cnt.melee,cnt.tank),opts=CLS_KEYS.filter(c=>cnt[c]===min);
+      out.push({id:'#b'+k,name:'Bot'+k,cls:opts[Math.floor(Math.random()*opts.length)],ctrl:'bot',team:t});k++;size[t]++;}
+  }
+  if(new Set(out.map(o=>o.team)).size<2)return{err:'2チーム以上に分かれてください。'};
+  return{list:out};
+}
 function newGame(list,from){
-  const units=list.map(o=>({id:o.id,name:o.name,cls:o.cls,ctrl:o.ctrl,remote:!!o.remote,x:0,y:0,vx:0,vy:0,face:0,aim:0,hp:C.HP,cd:0,spd:0,sk:C.SKILL_USES,skCd:0,dash:null,lastK:-1,
+  const units=list.map(o=>({id:o.id,name:o.name,cls:o.cls,ctrl:o.ctrl,remote:!!o.remote,team:o.team>=0?o.team:null,x:0,y:0,vx:0,vy:0,face:0,aim:0,hp:C.HP,cd:0,spd:0,sk:C.SKILL_USES,skCd:0,dash:null,lastK:-1,
     ammo:CLS[o.cls].ammo,rl:0,kb:null,inv:0,flash:0,swing:null,alive:true,zoneT:0,kills:0,place:0,lastN:-1,ai:newAI()}));
   const obs=makeObstacles(),M=C.MAP;
   if(from){const by={};units.forEach(u=>by[u.id]=u);
     for(const r of from.u){const u=by[String(r[0])];if(!u)continue;
       u.x=+r[2]||M/2;u.y=+r[3]||M/2;u.face=u.aim=(+r[4]||0)/100;u.hp=+r[5]||0;u.ammo=+r[6]||0;u.alive=!!r[8];u.kills=+r[9]||0;u.place=+r[10]||0;}
   }else{
-    const off=Math.random()*TAU;
-    units.forEach((u,i)=>{let a=off+i/units.length*TAU,d=620;
+    const off=Math.random()*TAU;  // チーム戦では味方どうしが隣に並ぶ
+    units.slice().sort((a,b)=>(a.team||0)-(b.team||0)).forEach((u,i)=>{let a=off+i/units.length*TAU,d=620;
       for(let k=0;k<20;k++){u.x=M/2+Math.cos(a)*d;u.y=M/2+Math.sin(a)*d;if(!obs.some(o=>circleRect(u,o)))break;d-=25;}
       u.face=u.aim=Math.atan2(M/2-u.y,M/2-u.x);});
   }
-  G={units,obs,proj:[],parts:[],texts:[],rings:[],time:from?(+from.t||0):0,zone:{x:M/2,y:M/2,r:from?(+from.z||C.ZONE_R0):C.ZONE_R0},
+  G={units,teams:units.some(u=>u.team!=null),obs,proj:[],parts:[],texts:[],rings:[],time:from?(+from.t||0):0,zone:{x:M/2,y:M/2,r:from?(+from.z||C.ZONE_R0):C.ZONE_R0},
     over:false,ended:false,endT:0,items:[],itemT:C.ITEM_FIRST,itemN:0,ev:[],evN:from?Math.max(0,...(from.e||[]).map(e=>+e[0]||0)):0,
     gid:from?String(from.g):Math.random().toString(36).slice(2,8),killer:null,cam:{x:M/2,y:M/2}};
   const f=player()||units[0];G.cam.x=f.x;G.cam.y=f.y;
@@ -354,7 +396,7 @@ function attack(u,dir){
     return true;}
   if(u.cls==='tank')dir=u.face;
   u.swing={dir,t:.14};ev(['s',u.id,Math.round(dir*100)]);sfxAt('swing',u.x,u.y,.8);
-  for(const v of G.units){if(v===u||!v.alive)continue;
+  for(const v of G.units){if(v===u||!v.alive||ally(u,v))continue;  // 味方には当たらない
     const d=Math.hypot(v.x-u.x,v.y-u.y);if(d>k.range+C.R)continue;
     if(Math.abs(angDiff(Math.atan2(v.y-u.y,v.x-u.x),dir))>k.arc/2+.25)continue;
     if(inFront(v,u.x,u.y)){block(v,(u.x+v.x)/2,(u.y+v.y)/2);continue;}
@@ -371,11 +413,13 @@ function hit(v,src,kbDir,kbDist){
 }
 function kill(v,src){
   v.alive=false;if(src)src.kills++;
-  const alive=G.units.filter(u=>u.alive);v.place=alive.length+1;
+  const alive=G.units.filter(u=>u.alive),left=new Set(alive.map(u=>G.teams?u.team:u.id)).size;
+  // チーム戦の順位はチーム単位：最後の1人が倒れたときに、そのチーム全員の順位が決まる
+  if(!G.teams)v.place=alive.length+1;else if(!alive.some(u=>u.team===v.team))G.units.forEach(u=>{if(u.team===v.team)u.place=left+1;});
   fxKill(v,src);ev(['k',v.id,src?src.id:'']);
   if(v.id===myId)G.killer=src;
   if(!G.over){
-    if(alive.length<=1){if(alive[0])alive[0].place=1;G.over=true;G.endT=1.0;}
+    if(left<=1){if(alive[0])G.units.forEach(u=>{if(u===alive[0]||(G.teams&&u.team===alive[0].team))u.place=1;});G.over=true;G.endT=1.0;}
     else if(MODE==='solo'&&v.id===myId){G.over=true;G.endT=1.3;}
   }
 }
@@ -390,7 +434,7 @@ function useSkill(u,dir){
   }else if(u.cls==='melee'){  // 無敵ダッシュ：向いた方へ一気に進み、その間は攻撃を受けない
     u.face=dir;u.dash={x:Math.cos(dir),y:Math.sin(dir),t:k.dashTime,sp:k.dash/k.dashTime};u.inv=Math.max(u.inv,k.dashTime+.15);
   }else{  // 衝撃波：周り全部の相手に当てて弾き飛ばす（盾の向きは関係ない）
-    for(const v of G.units){if(v===u||!v.alive)continue;
+    for(const v of G.units){if(v===u||!v.alive||ally(u,v))continue;
       if(Math.hypot(v.x-u.x,v.y-u.y)<=k.waveR+C.R)hit(v,u,Math.atan2(v.y-u.y,v.x-u.x),k.waveKb);}
   }
   fxSkill(u);ev(['S',u.id]);return true;
@@ -442,7 +486,7 @@ function feed(t){const f=$('feed'),s=document.createElement('span');s.textConten
 function pickTarget(u){
   const w={ranged:{ranged:1,melee:1.1,tank:1.7},melee:{ranged:1,melee:1.1,tank:.75},tank:{ranged:.75,melee:1.2,tank:1.3}}[u.cls];
   let best=null,bs=1e9;
-  for(const v of G.units){if(v===u||!v.alive)continue;const d=Math.hypot(v.x-u.x,v.y-u.y);if(d>760)continue;const s=d*w[v.cls];if(s<bs){bs=s;best=v;}}
+  for(const v of G.units){if(v===u||!v.alive||ally(u,v))continue;const d=Math.hypot(v.x-u.x,v.y-u.y);if(d>760)continue;const s=d*w[v.cls];if(s<bs){bs=s;best=v;}}
   return best;
 }
 // Bot がスキルを使ってよいか（残りがあり、前回から5〜10秒たっている）
@@ -475,7 +519,7 @@ function botThink(u,dt){
       const a=Math.atan2(dy,dx);turnTo(u,a,dt);
       if(d<CLS.tank.range+C.R-4&&Math.abs(angDiff(a,u.face))<.55)attack(u,u.face);
       // 囲まれたとき、または背中側に近づかれたときに衝撃波
-      const near=G.units.filter(v=>v!==u&&v.alive&&Math.hypot(v.x-u.x,v.y-u.y)<=CLS.tank.waveR+C.R).length;
+      const near=G.units.filter(v=>v!==u&&v.alive&&!ally(u,v)&&Math.hypot(v.x-u.x,v.y-u.y)<=CLS.tank.waveR+C.R).length;
       if((near>=2||(near>=1&&d<=CLS.tank.waveR+C.R&&Math.abs(angDiff(a,u.face))>CLS.tank.shield))&&botSkillReady(u))useSkill(u,u.face);
     }
   }
@@ -514,7 +558,7 @@ cv.addEventListener('touchend',touchEnd,{passive:false});cv.addEventListener('to
 
 function autoAim(p){
   let best=null,bd=1e9;const lim=(CLS[p.cls].range||60)+(p.cls==='ranged'?60:110);
-  for(const v of G.units){if(v===p||!v.alive)continue;const d=Math.hypot(v.x-p.x,v.y-p.y);if(d<lim&&d<bd){bd=d;best=v;}}
+  for(const v of G.units){if(v===p||!v.alive||ally(p,v))continue;const d=Math.hypot(v.x-p.x,v.y-p.y);if(d<lim&&d<bd){bd=d;best=v;}}
   return best?Math.atan2(best.y-p.y,best.x-p.x):p.face;
 }
 function firePlayerTouch(o){const p=player();if(!p||!p.alive||!G||G.over)return;
@@ -586,10 +630,10 @@ function step(dt){
   }
   const pR=CLS.ranged.projR;
   for(const pr of G.proj){pr.x+=pr.vx*dt;pr.y+=pr.vy*dt;pr.life-=dt;
-    if(pr.pierce){for(const v of G.units){if(v===pr.owner||!v.alive||pr.hits.has(v))continue;  // 貫通弾は壁も盾も無視、同じ相手には1回だけ
+    if(pr.pierce){for(const v of G.units){if(v===pr.owner||!v.alive||pr.hits.has(v)||ally(pr.owner,v))continue;  // 貫通弾は壁も盾も無視、同じ相手には1回だけ
         if(Math.hypot(v.x-pr.x,v.y-pr.y)<C.R+pR*.85){pr.hits.add(v);hit(v,pr.owner,Math.atan2(pr.vy,pr.vx));}}continue;}
     if(G.obs.some(o=>{const cx=Math.max(o.x,Math.min(pr.x,o.x+o.w)),cy=Math.max(o.y,Math.min(pr.y,o.y+o.h));return Math.hypot(pr.x-cx,pr.y-cy)<pR*.5;})){pr.life=0;for(let i=0;i<5;i++)spark(pr.x,pr.y,'#8aa');continue;}
-    for(const v of G.units){if(v===pr.owner||!v.alive)continue;
+    for(const v of G.units){if(v===pr.owner||!v.alive||ally(pr.owner,v))continue;  // 弾は味方をすり抜ける
       if(Math.hypot(v.x-pr.x,v.y-pr.y)<C.R+pR*.85){pr.life=0;
         if(inFront(v,pr.x-pr.vx*.05,pr.y-pr.vy*.05))block(v,pr.x,pr.y);else hit(v,pr.owner,Math.atan2(pr.vy,pr.vx));break;}}}
   G.proj=G.proj.filter(p=>p.life>0);
@@ -608,8 +652,9 @@ function fxStep(dt){
   if(f){G.cam.x+=(f.x-G.cam.x)*Math.min(1,dt*8);G.cam.y+=(f.y-G.cam.y)*Math.min(1,dt*8);}
 }
 function updateHud(){
-  const n=G.units.filter(u=>u.alive).length;$('alive').innerHTML=`残り <b>${n}</b>人`;
-  const zc=$('zoneChip'),p=player();
+  const n=G.units.filter(u=>u.alive).length,zc=$('zoneChip'),p=player();
+  if(G.teams&&p&&p.team!=null){const mine=G.units.filter(u=>u.alive&&u.team===p.team).length;$('alive').innerHTML=`味方 <b>${mine}</b>人・敵 <b>${n-mine}</b>人`;}
+  else $('alive').innerHTML=`残り <b>${n}</b>人`;
   const out=!!(p&&p.alive&&Math.hypot(p.x-G.zone.x,p.y-G.zone.y)>G.zone.r);
   zc.className='chip'+(out?' warn':'');
   zc.textContent=out?'安全地帯の外！':G.time<C.ZONE_START?`縮小まで ${Math.ceil(C.ZONE_START-G.time)}秒`:G.zone.r>C.ZONE_R1+1?'安全地帯 縮小中':'安全地帯 最小';
@@ -617,7 +662,7 @@ function updateHud(){
   if(show){const k=CLS[p.cls],sig=p.cls+p.sk+(G.time<0);if(sb.dataset.sig!==sig){sb.dataset.sig=sig;sb.style.setProperty('--c',k.color);
     sb.innerHTML=`<span>${k.skill}</span><b>×${p.sk}</b>`;sb.disabled=p.sk<1||G.time<0;}}
   const mc=$('modeChip');
-  mc.textContent=MODE==='solo'?'Bot練習':`部屋 ${(NET.code||'').toUpperCase()}${!p?'・観戦中':p.alive?'':'・観戦中'}${MODE==='host'?'・ホスト':''}`;
+  mc.textContent=MODE==='solo'?'Bot練習':`部屋 ${(NET.code||'').toUpperCase()}${p&&p.team!=null?'・チーム'+TEAM_NAMES[p.team]:''}${!p?'・観戦中':p.alive?'':'・観戦中'}${MODE==='host'?'・ホスト':''}`;
 }
 
 // ===== オンライン（PeerJS） =====
@@ -642,12 +687,12 @@ async function peerOpts(){
 // （回線が突然切れたときは WebRTC の close が来ないことがあるため）
 const HB_MS=1000, HB_TIMEOUT_MS=15000;
 const NET={ok:false,R:null,code:null,me:null,j:0,joinedAt:0,nick:'',phase:'lobby',amHost:false,
-  lastS:null,lastSnap:null,lastHostPh:null,inputs:{},peerSet:new Set(),n:0,d:0,k:0,kd:0,lastInp:'',inpT:0,sendT:0,bots:true,lobbySig:'',trim:false};
+  lastS:null,lastSnap:null,lastHostPh:null,inputs:{},peerSet:new Set(),n:0,d:0,k:0,kd:0,lastInp:'',inpT:0,sendT:0,bots:true,lobbySig:'',trim:false,rule:'ffa',tm:null};
 function setP(patch){return NET.R?NET.R.presence(patch):Promise.resolve();}
 const byJ=(a,b)=>(a.presence.j-b.presence.j)||(a.peer<b.peer?-1:a.peer>b.peer?1:0);
 function snap(){
   const s={g:G.gid,t:Math.round(G.time*10)/10,z:Math.round(G.zone.r),o:G.over?1:0,n:{},
-    u:G.units.map(x=>[x.id,CLS_KEYS.indexOf(x.cls),Math.round(x.x),Math.round(x.y),Math.round(x.face*100),x.hp,x.ammo,Math.round(x.rl/CLS[x.cls].reload*10),x.alive?1:0,x.kills,x.place,Math.round(x.vx),Math.round(x.vy),Math.round((x.spd||0)*10),x.sk]),
+    u:G.units.map(x=>[x.id,CLS_KEYS.indexOf(x.cls),Math.round(x.x),Math.round(x.y),Math.round(x.face*100),x.hp,x.ammo,Math.round(x.rl/CLS[x.cls].reload*10),x.alive?1:0,x.kills,x.place,Math.round(x.vx),Math.round(x.vy),Math.round((x.spd||0)*10),x.sk,x.team==null?-1:x.team]),
     i:G.items.map(it=>[it.id,ITEM_KEYS.indexOf(it.type),Math.round(it.x),Math.round(it.y)]),
     p:G.proj.map(q=>[Math.round(q.x),Math.round(q.y),Math.round(q.vx),Math.round(q.vy),q.pierce?1:0]),
     e:G.ev.slice()};
@@ -672,7 +717,9 @@ function applySnap(s){
     if(!u){u={id,cls,x:+r[2]||0,y:+r[3]||0,face:0,hp:3,ammo:3,rl:0,alive:true,inv:0,flash:0,swing:null,kills:0,place:0,name:'',sx:0,sy:0,vx:0,vy:0};G.byId[id]=u;G.units.push(u);}
     u.sx=+r[2]||0;u.sy=+r[3]||0;u.face=(+r[4]||0)/100;u.hp=+r[5]||0;u.ammo=+r[6]||0;u.rl=(+r[7]||0)/10*CLS[cls].reload;
     u.alive=!!r[8];u.kills=+r[9]||0;u.place=+r[10]||0;u.vx=+r[11]||0;u.vy=+r[12]||0;u.spd=(+r[13]||0)/10;u.sk=Math.max(0,+r[14]||0);u.name=cleanNick(names[id]);
+    u.team=Number.isInteger(r[15])&&r[15]>=0&&r[15]<TEAM_NAMES.length?r[15]:null;
   }
+  G.teams=G.units.some(u=>u.team!=null);
   G.items=(Array.isArray(s.i)?s.i:[]).slice(0,10).filter(q=>Array.isArray(q)&&ITEM_KEYS[q[1]]).map(q=>({id:+q[0]||0,type:ITEM_KEYS[q[1]],x:+q[2]||0,y:+q[3]||0}));
   G.proj=(Array.isArray(s.p)?s.p:[]).slice(0,40).map(q=>({x:+q[0]||0,y:+q[1]||0,vx:+q[2]||0,vy:+q[3]||0,pierce:q[4]===1}));
   for(const e of (Array.isArray(s.e)?s.e:[])){if(!Array.isArray(e))continue;const i=+e[0]||0;if(i>G.lastEv){G.lastEv=i;replay(e);}}
@@ -736,37 +783,57 @@ function netTick(){
 
 function renderLobby(ps,host,amHost,waiting){
   const sorted=ps.slice().sort(byJ);
-  const sig=JSON.stringify([amHost,waiting,NET.bots,sorted.map(p=>[p.peer,p.presence.nick,p.presence.cls,p.sameTab])]);
+  const rule=host&&isRule(host.presence.rule)?host.presence.rule:'ffa',R=RULES[rule];if(host)NET.rule=rule;
+  const sig=JSON.stringify([amHost,waiting,NET.bots,rule,sorted.map(p=>[p.peer,p.presence.nick,p.presence.cls,p.presence.tm,p.sameTab])]);
   if(sig===NET.lobbySig)return;NET.lobbySig=sig;
   $('codeTxt').textContent=(NET.code||'').toUpperCase();
   const ul=$('members');ul.innerHTML='';const bad=takenNames(sorted);
+  const me=sorted.find(p=>p.sameTab),myTeam=me?teamOf(rule,me.presence.tm):-1,players=sorted.slice(0,C.MAX_PLAYERS);
   sorted.forEach((p,i)=>{
-    const cls=isCls(p.presence.cls)?p.presence.cls:'ranged',li=document.createElement('li');
+    const cls=isCls(p.presence.cls)?p.presence.cls:'ranged',li=document.createElement('li'),t=teamOf(rule,p.presence.tm);
     const dot=document.createElement('span');dot.className='dot';
-    // 他の人のキャラは試合開始まで伏せる（三すくみの読み合いのため）
-    if(p.sameTab){dot.style.setProperty('--c',CLS[cls].color);dot.textContent=CLS[cls].mark;}else{dot.classList.add('hidden');dot.textContent='？';}
+    // 他の人のキャラは試合開始まで伏せる（三すくみの読み合いのため）。チーム戦では同じチームの人のキャラだけ見える
+    if(p.sameTab||(myTeam>=0&&t===myTeam&&isCls(p.presence.cls))){dot.style.setProperty('--c',CLS[cls].color);dot.textContent=CLS[cls].mark;}else{dot.classList.add('hidden');dot.textContent='？';}
     const who=document.createElement('span');who.className='who';who.textContent=cleanNick(p.presence.nick);
     li.append(dot,who);
-    const tag=(t,c)=>{const s=document.createElement('span');s.className='tag'+(c?' '+c:'');s.textContent=t;li.append(s);};
+    const tag=(t,c)=>{const s=document.createElement('span');s.className='tag'+(c?' '+c:'');s.textContent=t;li.append(s);return s;};
+    if(t>=0)tag('チーム'+TEAM_NAMES[t],'team').style.setProperty('--c',TEAM_COLORS[t]);
     if(!waiting&&host&&p.peer===host.peer)tag('ホスト','host');
     if(p.sameTab)tag('あなた');
     if(bad.has(p.peer))tag('名前が重複','ng');
     if(i>=C.MAX_PLAYERS)tag('観戦');
     ul.append(li);
   });
-  const humans=Math.min(sorted.length,C.MAX_PLAYERS),total=NET.bots?Math.max(humans,C.FILL_TO):humans;
-  const me=sorted.find(p=>p.sameTab);$('nickErr').hidden=!(me&&bad.has(me.peer));
-  $('botsRow').hidden=!amHost;$('startBtn').hidden=!amHost;const badPlayer=sorted.slice(0,C.MAX_PLAYERS).some(p=>bad.has(p.peer));  // 観戦者の重複では試合開始を止めない
-  $('startBtn').disabled=total<2||badPlayer;
+  // ルール（ホストだけが選べる）とチーム（チーム戦のときに各自が選ぶ）
+  const rb=$('ruleBtns');rb.innerHTML='';
+  for(const k of RULE_KEYS){const b=segBtn(RULES[k].name,k===rule);b.disabled=!amHost;b.onclick=()=>setRule(k);rb.append(b);}
+  $('teamRow').hidden=!R.n;const tb=$('teamBtns');tb.innerHTML='';
+  if(R.n){const cnt=Array(R.n).fill(0);players.forEach(p=>{const t=teamOf(rule,p.presence.tm);if(t>=0)cnt[t]++;});
+    const b0=segBtn('おまかせ',myTeam<0);b0.onclick=()=>pickTeam(null);tb.append(b0);
+    for(let t=0;t<R.n;t++){const b=segBtn(`${TEAM_NAMES[t]}　${cnt[t]}/${R.cap}`,myTeam===t,TEAM_COLORS[t]);b.disabled=cnt[t]>=R.cap&&myTeam!==t;b.onclick=()=>pickTeam(t);tb.append(b);}}
+  $('botsTxt').textContent=R.n?'チームの空きをBotで埋める':'6人に足りない分をBotで埋める';
+  const humans=players.length;let total=NET.bots?Math.max(humans,C.FILL_TO):humans,err='',plan='';
+  if(R.n){const pl=teamPlan(players.map(p=>({id:p.peer,cls:'ranged',tm:p.presence.tm})),rule,NET.bots);
+    if(pl.err)err=pl.err;else{total=pl.list.length;const parts=[];
+      for(let t=0;t<R.n;t++){const h=pl.list.filter(o=>o.team===t&&o.ctrl!=='bot').length,b=pl.list.filter(o=>o.team===t&&o.ctrl==='bot').length;
+        if(h+b)parts.push(`${TEAM_NAMES[t]} ${[h?h+'人':'',b?'Bot'+b:''].filter(Boolean).join('＋')}`);}
+      plan=`${R.name}（${parts.join('・')}）で始めます。おまかせの人は空いているチームに入ります。`;}}
+  $('nickErr').hidden=!(me&&bad.has(me.peer));
+  $('botsRow').hidden=!amHost;$('startBtn').hidden=!amHost;const badPlayer=players.some(p=>bad.has(p.peer));  // 観戦者の重複では試合開始を止めない
+  $('startBtn').disabled=total<2||badPlayer||!!err;
   $('lobbyMsg').className='status';
-  $('lobbyMsg').textContent=waiting?'部屋の情報を確認しています…':amHost?(badPlayer?'同じ名前の人がいます。名前を変えてもらってください。':total<2?'1人では始められません。Botを入れるか、友達の参加を待ってください。':`${humans}人${total>humans?`＋Bot${total-humans}体`:''}で始めます。`):'ホストが試合を始めるのを待っています。';
+  $('lobbyMsg').textContent=waiting?'部屋の情報を確認しています…':amHost?(badPlayer?'同じ名前の人がいます。名前を変えてもらってください。':total<2?'1人では始められません。Botを入れるか、友達の参加を待ってください。':err?err:plan||`${humans}人${total>humans?`＋Bot${total-humans}体`:''}で始めます。`):'ホストが試合を始めるのを待っています。';
 }
+function segBtn(txt,on,c){const b=document.createElement('button');b.className='btn';b.textContent=txt;b.setAttribute('aria-pressed',String(on));if(c)b.style.setProperty('--c',c);return b;}
+function setRule(k){if(!NET.amHost||!isRule(k))return;NET.rule=k;setP({rule:k});NET.lobbySig='';}
+function pickTeam(t){NET.tm=t;setP({tm:t});NET.lobbySig='';}  // null でチームの指定を消す（おまかせ）
 
 function hostStart(){
   const ps=(NET.R?NET.R.peers():[]).filter(p=>p.presence&&p.presence.code===NET.code&&typeof p.presence.nick==='string'&&typeof p.presence.j==='number').sort(byJ).slice(0,C.MAX_PLAYERS);
   if(takenNames(ps).size)return;
-  const list=ps.map(p=>({id:p.peer,name:cleanNick(p.presence.nick),cls:isCls(p.presence.cls)?p.presence.cls:'ranged',ctrl:p.sameTab?'local':'remote',remote:!p.sameTab}));
-  if(NET.bots)fillBots(list,C.FILL_TO);
+  let list=ps.map(p=>({id:p.peer,name:cleanNick(p.presence.nick),cls:isCls(p.presence.cls)?p.presence.cls:'ranged',ctrl:p.sameTab?'local':'remote',remote:!p.sameTab,tm:p.presence.tm}));
+  if(RULES[NET.rule].n){const pl=teamPlan(list,NET.rule,NET.bots);if(pl.err)return;list=pl.list;}
+  else if(NET.bots)fillBots(list,C.FILL_TO);
   if(list.length<2)return;
   myId=NET.me;MODE='host';NET.phase='play';newGame(list);G.time=-C.COUNTDOWN;
   // 参加者の攻撃・スキルの押下カウンタは試合開始時の値を基準にする（開始直後の最初の1回も取りこぼさない）
@@ -781,6 +848,7 @@ function cleanPresence(p){
   if(typeof p.code==='string')o.code=p.code.slice(0,8);
   if(typeof p.nick==='string')o.nick=cleanNick(p.nick);
   if(isCls(p.cls))o.cls=p.cls;
+  if(Number.isInteger(p.tm)&&p.tm>=0&&p.tm<TEAM_NAMES.length)o.tm=p.tm;
   if(typeof p.j==='number'&&isFinite(p.j))o.j=Math.max(1,p.j);
   if(p.inp&&typeof p.inp==='object'){const i=p.inp;o.inp={x:+i.x||0,y:+i.y||0,a:(i.a===null||i.a===undefined)?null:(+i.a||0),f:i.f?1:0,n:+i.n||0,d:+i.d||0,k:+i.k||0,kd:+i.kd||0};}
   return o;
@@ -795,8 +863,13 @@ function makeHub(code,opts){return new Promise((res,rej)=>{
   const timer=setInterval(()=>{const now=performance.now();
     for(const [id,c] of conns)if(now-(seen.get(id)||now)>HB_TIMEOUT_MS){try{c.close();}catch(e){}c.emit('close');}
     if(!dirty&&now-sentT<HB_MS)return;dirty=false;sentT=now;
-    const{cls:_,...me}=mine,m={[hubId]:me};for(const id in map){const{inp,cls,...rest}=map[id];m[id]=rest;}  // キャラは配らない
-    const msg={t:'all',m};for(const c of conns.values())if(c.open){try{c.send(msg);}catch(e){}}},40);
+    // キャラは配らない。ただしチーム戦では、同じチームの人のキャラだけ配る
+    const{cls:hc,...me}=mine,base={[hubId]:me};for(const id in map){const{inp,cls,...rest}=map[id];base[id]=rest;}
+    const msg={t:'all',m:base};
+    for(const [cid,c] of conns){if(!c.open)continue;const t=teamOf(mine.rule,(map[cid]||{}).tm);let out=msg;
+      if(t>=0){const m={...base};if(hc&&teamOf(mine.rule,mine.tm)===t)m[hubId]={...me,cls:hc};
+        for(const id in map)if(id!==cid&&map[id].cls&&teamOf(mine.rule,map[id].tm)===t)m[id]={...base[id],cls:map[id].cls};out={t:'all',m};}
+      try{c.send(out);}catch(e){}}},40);
   peer.on('open',()=>{opened=true;res(room);});
   peer.on('connection',conn=>{
     conn.on('open',()=>{if(conns.size>=12){conn.close();return;}conns.set(conn.peer,conn);seen.set(conn.peer,performance.now());dirty=true;});
@@ -843,10 +916,10 @@ function errMsg(e){const t=e&&e.type;
 function inviteUrl(code){return location.origin+location.pathname+'?room='+code.toUpperCase();}
 function enterRoom(R,code,isHub){
   Object.assign(NET,{R,code,j:isHub?0:Date.now(),joinedAt:performance.now(),phase:'lobby',amHost:false,
-    lastS:null,lastSnap:null,lastHostPh:null,inputs:{},lobbySig:'',trim:false,lastInp:''});
+    lastS:null,lastSnap:null,lastHostPh:null,inputs:{},lobbySig:'',trim:false,lastInp:'',tm:null});
   MODE=null;G=null;
   if(!isHub)R.onLost=()=>{if(NET.R===R){leaveRoom();setStatus('ホストとの接続が切れました。');}};
-  setP(Object.assign({code,nick:NET.nick,cls:chosen,j:NET.j},isHub?{hub:1,ph:'lobby'}:{}));
+  setP(Object.assign({code,nick:NET.nick,cls:chosen,j:NET.j},isHub?{hub:1,ph:'lobby',rule:NET.rule}:{}));
   $('codeTxt').textContent=code.toUpperCase();$('inviteUrl').value=inviteUrl(code);$('lobbyNick').value=$('nick').value;
   $('members').innerHTML='';$('lobbyMsg').textContent='接続しています…';$('startBtn').hidden=true;$('botsRow').hidden=true;
   showOnly('lobby');
@@ -894,13 +967,15 @@ function showResult(){
 }
 function showNetResult(){
   const p=player();
-  $('resTitle').textContent=p?(p.place===1?'優勝！':`${p.place||'-'}位`):'試合終了';if(p)sfx(p.place===1?'win':'lose');
-  $('resStats').textContent=p?`キャラ：${CLS[p.cls].name}　倒した数：${p.kills}`:'観戦していました';
+  const tm=p&&p.team!=null;  // チーム戦の順位はチーム単位
+  $('resTitle').textContent=p?(p.place===1?(tm?'チームの勝利！':'優勝！'):`${tm?'チーム':''}${p.place||'-'}位`):'試合終了';if(p)sfx(p.place===1?'win':'lose');
+  $('resStats').textContent=p?`${tm?`チーム${TEAM_NAMES[p.team]}　`:''}キャラ：${CLS[p.cls].name}　倒した数：${p.kills}`:'観戦していました';
   const ol=$('rank');ol.innerHTML='';
   G.units.slice().sort((a,b)=>(a.place||99)-(b.place||99)).forEach(u=>{
     const li=document.createElement('li');
     const pl=document.createElement('span');pl.className='pl';pl.textContent=u.place?`${u.place}位`:'-';
-    const nm=document.createElement('span');nm.className='nm'+(u.id===myId?' me':'');nm.textContent=`${u.name}（${CLS[u.cls].name}）`;
+    const nm=document.createElement('span');nm.className='nm'+(u.id===myId?' me':'');nm.textContent=`${u.team!=null?TEAM_NAMES[u.team]+'　':''}${u.name}（${CLS[u.cls].name}）`;
+    if(u.team!=null&&u.id!==myId)nm.style.color=TEAM_COLORS[u.team];
     const k=document.createElement('span');k.textContent=`${u.kills}キル`;
     li.append(pl,nm,k);ol.append(li);});
   const b=$('resBtns');b.innerHTML='';
@@ -971,6 +1046,8 @@ function rr(x,y,w,h,r){ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,r)
 function drawUnit(u,font){
   const k=CLS[u.cls],R=C.R;
   ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(u.x,u.y+R*.8,R,R*.45,0,0,TAU);ctx.fill();
+  // チーム戦：足元にチームの色の台座
+  if(u.team!=null){ctx.fillStyle=TEAM_COLORS[u.team];ctx.globalAlpha=.7;ctx.beginPath();ctx.ellipse(u.x,u.y+R*.55,R+8,(R+8)*.5,0,0,TAU);ctx.fill();ctx.globalAlpha=1;}
   if(u.swing){ctx.fillStyle='rgba(255,255,255,.28)';ctx.beginPath();ctx.moveTo(u.x,u.y);ctx.arc(u.x,u.y,k.range+R,u.swing.dir-k.arc/2,u.swing.dir+k.arc/2);ctx.closePath();ctx.fill();}
   if(u.id===myId){ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.arc(u.x,u.y,R+12,0,TAU);ctx.stroke();}
   if(u.spd>0){ctx.strokeStyle='rgba(111,227,255,.7)';ctx.lineWidth=3;ctx.setLineDash([6,6]);ctx.lineDashOffset=-performance.now()/30;
@@ -986,7 +1063,9 @@ function drawUnit(u,font){
   for(let i=0;i<C.HP;i++){ctx.fillStyle=i<u.hp?'#7ee08a':'rgba(0,0,0,.45)';ctx.fillRect(u.x-22+i*15,u.y-R-20,12,5);}
   for(let i=0;i<k.ammo;i++){const fill=i<u.ammo?1:i===u.ammo?Math.min(1,u.rl/k.reload):0,x=u.x-22+i*15,y=u.y-R-12;
     ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(x,y,12,4);ctx.fillStyle=i<u.ammo?'#ffd36b':'rgba(255,211,107,.5)';ctx.fillRect(x,y,12*fill,4);}
-  ctx.fillStyle='rgba(238,243,239,.85)';ctx.font='500 11px '+font;ctx.textBaseline='alphabetic';ctx.fillText(u.name,u.x,u.y+R+22);
+  ctx.font='500 11px '+font;ctx.textBaseline='alphabetic';
+  if(u.team!=null){ctx.fillStyle=TEAM_COLORS[u.team];ctx.fillText(TEAM_NAMES[u.team]+' '+u.name,u.x,u.y+R+22);}
+  else{ctx.fillStyle='rgba(238,243,239,.85)';ctx.fillText(u.name,u.x,u.y+R+22);}
 }
 
 // カウントダウンの「3・2・1」で tick、「スタート！」で go を鳴らす（オンライン対戦のみ）
